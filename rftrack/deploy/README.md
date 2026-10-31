@@ -43,13 +43,24 @@ docker compose -f rftrack/deploy/docker-compose.yml up -d --build
 ## 数据搬家（归档）
 
 导出：`curl -o site-home.zip http://<host>:9000/api/export/site/1`（读侧，汇聚实例也能导）。
-导入：`POST /api/import/site-package` **只写新库文件**（`<库>.imports/` 下），按 R18
+导入：表单字段名是 `file`，写别的会 422 `body.file` 缺字段（不是权限问题）：
+
+```bash
+curl -F "file=@site-home.zip" http://<host>:9000/api/import/site-package
+```
+
+**只写新库文件**（`<库>.imports/` 下），按 R18
 不自动切换现网库——导入报告里的 `next_step` 就是人工改 `RFTRACK_DB_PATH` 重启这一步。
 
 ## 坑
 
 - compose 项目名要固定（本文件已加 `name: rftrack`）：同一目录多份 compose 共享默认
   项目名时，`down` 会把别的环境的容器一起带走。
+- 宿主机 9000 常被占（MinIO 默认就吃 9000/9001）：`RFTRACK_HOST_PORT=19000 docker compose up -d`
+  换端口。别指望第二个 `-f` 文件——compose 对 `ports` 列表做**并集合并**，加一条变成同时
+  发布两个端口，冲突那个照样绑失败。
+- `python-multipart` 必须在 `rftrack/requirements.txt` 里：缺了它不是导入报错，而是
+  **路由注册那一刻整个进程起不来**，本机装了别的项目的同名包所以测试全绿（Docker 首跑踩实）。
 - systemd 单元的 `ReadWritePaths=/opt/rftrack/data` 必须真的覆盖 `RFTRACK_DB_PATH`
   所在目录，否则 ProtectSystem=strict 下写库直接 EACCES，现象是"迁移失败，拒绝启动"。
 - Pi 上插着板子的 USB 串口属于 `dialout` 组：`sudo usermod -aG dialout rftrack`。
