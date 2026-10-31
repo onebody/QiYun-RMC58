@@ -30,6 +30,7 @@ from . import APP_VERSION
 from .config import Settings
 from .database import Database
 from .routers import (
+    archive,
     bridge,
     events,
     gateways,
@@ -196,4 +197,5 @@ def create_app(
     app.include_router(alert_routes.rules_router)
     app.include_router(alert_routes.router)
     app.include_router(target_routes.router)
+    app.include_router(archive.router)
     return app

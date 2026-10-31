@@ -1,0 +1,23 @@
+# RF Track 容器编排（S9 次形态）。注意 name: 固定——同目录多 compose 项目
+# 共享默认项目名时会互相误删容器（本机踩过，见 deploy/README.md「坑」一节）。
+name: rftrack
+
+services:
+  backend:
+    build:
+      context: ../..
+      dockerfile: rftrack/deploy/Dockerfile
+    image: rftrack-backend
+    ports:
+      - "9000:9000"
+    environment:
+      # 现场配置往这里加或用 env_file: rftrack.env。数据库路径固定在卷上，
+      # 容器换掉数据不丢；**绝不**挂到容器内可随镜像消失的路径。
+      RFTRACK_DB_PATH: /data/rftrack.sqlite3
+      # RFTRACK_INSTANCE_ROLE: site
+    volumes:
+      - rftrack-data:/data
+    restart: unless-stopped
+
+volumes:
+  rftrack-data:
