@@ -9,7 +9,10 @@ services:
       dockerfile: rftrack/deploy/Dockerfile
     image: rftrack-backend
     ports:
-      - "9000:9000"
+      # 宿主机端口要可覆盖：MinIO 默认占 9000，本机 2026-10-31 首跑就撞上。用 env 而不是
+      # 第二个 -f 文件——compose 对 `ports` 列表是**并集合并**，override 里加一条只会变成
+      # 同时发布两个端口，9000 那个照样绑失败（要替换得上 `!override` 标签）。
+      - "${RFTRACK_HOST_PORT:-9000}:9000"
     environment:
       # 现场配置往这里加或用 env_file: rftrack.env。数据库路径固定在卷上，
       # 容器换掉数据不丢；**绝不**挂到容器内可随镜像消失的路径。
