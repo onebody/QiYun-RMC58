@@ -123,7 +123,10 @@ bool uart_link_open(int tx, int rx) {
     if (tx == 0) tx = pin_tx;
     if (rx == 0) rx = pin_rx;
     if (!head_pin_ok(tx) || !head_pin_ok(rx)) return false;
-    if (tx == pin_tx && rx == pin_rx) return installed; /* already armed */
+    /* Only an *armed* link on this pair is a no-op. Written as `return installed`
+     * it also answered false to the first open at boot - which asks for exactly
+     * the default pair, so the relay would never install the driver at all. */
+    if (installed && tx == pin_tx && rx == pin_rx) return true;
     if (installed) {
         uart_driver_delete(UART_LINK_PORT);
         installed = false;

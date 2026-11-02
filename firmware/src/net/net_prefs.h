@@ -2,6 +2,7 @@
  * CONFIG SAVE's lap-timer blob, different keys). GPL-3.0-or-later. */
 #pragma once
 #include <stdbool.h>
+#include <stdint.h>
 #include "esp_err.h"
 
 typedef struct {
@@ -9,6 +10,7 @@ typedef struct {
     char pass[65]; /* WPA2 passphrase caps at 63; 64 leaves a NUL and slack */
     char url[129]; /* ws://host:port/node?id=... */
     char id[33];   /* the name the bridge lists us under */
+    uint16_t tx, rx; /* relay: the head link's pair. 0 = the compiled defaults */
     bool on;
 } net_prefs_t;
 

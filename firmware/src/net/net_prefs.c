@@ -33,6 +33,13 @@ esp_err_t net_prefs_load(net_prefs_t *p) {
     uint8_t on = 0;
     if (nvs_get_u8(h, "on", &on) != ESP_OK) on = 0;
     p->on = on != 0;
+    uint16_t tx = 0, rx = 0;
+    /* A missing key is 0, and 0 means "the pair the image was built with" -
+     * so a relay that never heard of NET UART behaves as it did before it. */
+    if (nvs_get_u16(h, "tx", &tx) != ESP_OK) tx = 0;
+    if (nvs_get_u16(h, "rx", &rx) != ESP_OK) rx = 0;
+    p->tx = tx;
+    p->rx = rx;
     nvs_close(h);
     return ESP_OK;
 }
@@ -45,6 +52,8 @@ esp_err_t net_prefs_store(const net_prefs_t *p) {
     if (e == ESP_OK) e = put_str(h, "pass", p->pass);
     if (e == ESP_OK) e = put_str(h, "url", p->url);
     if (e == ESP_OK) e = put_str(h, "id", p->id);
+    if (e == ESP_OK) e = nvs_set_u16(h, "tx", p->tx);
+    if (e == ESP_OK) e = nvs_set_u16(h, "rx", p->rx);
     if (e == ESP_OK) e = nvs_set_u8(h, "on", p->on ? 1 : 0);
     if (e == ESP_OK) e = nvs_commit(h);
     nvs_close(h);
@@ -59,7 +68,7 @@ esp_err_t net_prefs_erase(void) {
     esp_err_t e = nvs_open(NS, NVS_READWRITE, &h);
     if (e == ESP_ERR_NVS_NOT_FOUND) return ESP_OK;
     if (e != ESP_OK) return e;
-    static const char *keys[] = {"ssid", "pass", "url", "id", "on"};
+    static const char *keys[] = {"ssid", "pass", "url", "id", "on", "tx", "rx"};
     for (unsigned i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
         e = nvs_erase_key(h, keys[i]);
         if (e == ESP_ERR_NVS_NOT_FOUND) e = ESP_OK;

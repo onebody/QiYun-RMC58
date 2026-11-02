@@ -21,6 +21,8 @@
 #include "status_led.h"
 #if RX_WIFI_RELAY
 #include "net_prefs.h"
+#include "relay_pipe.h"
+#include "uart_link.h"
 #include "ws_link.h"
 #endif
 
@@ -108,6 +110,11 @@ void app_main(void) {
      * the uplink ever gets armed. Returns esp_err_t, so ESP_OK is the success -
      * `if (!...)` would report a working ring as a failed one. */
     if (ws_link_open() != ESP_OK) link_printf("ERR net_ring\n");
+    /* The head link after the prefs: NET UART says which pair the wire is
+     * actually on, and 0/0 keeps U0TXD/U0RXD. Failing here is not fatal - the
+     * relay still uplinks its own replies, and NET STATUS shows head_ready. */
+    if (!uart_link_open(prefs.tx, prefs.rx)) link_printf("ERR head_uart\n");
+    relay_pipe_start();
     commands_task_start();
     if (prefs.on && prefs.ssid[0] && prefs.url[0] && !ws_link_start(&prefs))
         link_printf("ERR net_start\n"); /* NET STATUS carries the reason */

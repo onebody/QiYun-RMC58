@@ -20,7 +20,7 @@ set(includes "." "radio" "dsp" "scan" "proto" "net")
 # object, so this is the isolation gate Task 6 Step 4 checks with `find`.
 # The -D form is accepted too, for a PlatformIO that does not propagate ENV.
 if(DEFINED ENV{WIDSCAN_RELAY} OR WIDSCAN_RELAY)
-    list(APPEND sources "net/ws_codec.c" "net/ws_link.c" "net/net_prefs.c")
+    list(APPEND sources "net/ws_codec.c" "net/ws_link.c" "net/net_prefs.c" "net/relay_pipe.c")
 endif()
 message(STATUS "widscan58 relay=${WIDSCAN_RELAY} env=$ENV{WIDSCAN_RELAY}")
 
