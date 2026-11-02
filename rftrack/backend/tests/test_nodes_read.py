@@ -186,3 +186,98 @@ def test_malformed_capability_json_degrades_to_unsupported_not_a_500(chain, clie
     node = response.json()[0]
     assert node["capabilities"]["levels"] == {"supported": False, "reason": "undeclared"}
     assert node["declaration_error"] == "malformed_json"
+
+
+def test_put_declares_the_three_columns_the_ui_has_always_rendered_unsupported(chain, client):
+    """`levels/spectrum/rawiq` 与 `fw_version`/`protocol_version` 自 001 就在表里，
+    页面上恒是 unsupported——因为今天没有任何写路径。M2 补的就是这一条。
+    spectrum 是有界能力：只有 921600 的下行才配得上 992 bins（line_pace 的上限）。"""
+    chain["add"]("起点塔", 7, "中继头的板", "node-ws", "node:fake-head")
+    before = client.get("/api/nodes/7").json()["capabilities"]
+    assert before["spectrum"] == {"supported": False, "reason": "undeclared"}
+
+    row = client.put(
+        "/api/nodes/7",
+        json={
+            "fw_version": "Web-v0.10",
+            "protocol_version": 1,
+            "capabilities": {
+                "levels": True,
+                "spectrum": {"supported": True, "max_bins": 992},
+                "rawiq": {"supported": False},
+            },
+        },
+    )
+    assert row.status_code == 200, row.text
+    out = row.json()
+    assert out["declaration_error"] is None
+    assert out["capabilities"]["levels"] == {"supported": True}
+    assert out["capabilities"]["spectrum"] == {"supported": True, "max_bins": 992}
+    assert out["capabilities"]["rawiq"] == {
+        "supported": False,
+        "reason": "declared_unsupported",
+    }
+    assert out["fw_version"] == "Web-v0.10"
+    assert out["protocol_version"] == 1
+    # 形状没被发明：响应就是 GET 的那一套键
+    assert set(out) == set(client.get("/api/nodes/7").json())
+
+
+def test_a_declaration_survives_the_next_endpoint_sweep(chain, client):
+    """`reconcile()` 每轮都会重跑。它要是把声明冲掉，操作员填一次就永远白填——
+    而现象是"能力位过一会儿自己变回 unsupported"，最难倒推。"""
+    from app.services.ingest import reconcile
+    from app.config import Settings
+    from app.models import Gateway
+
+    chain["add"]("起点塔", 8, "扫频头", "node-ws", "node:head-8")
+    client.put(
+        "/api/nodes/8",
+        json={"capabilities": {"levels": True, "spectrum": {"supported": True, "max_bins": 512}}},
+    )
+    with client.app.state.db.scope() as session:
+        gateway = session.get(Gateway, chain["gateways"]["起点塔"]["gateway_id"])
+        reconcile(
+            session,
+            gateway,
+            [
+                {
+                    "id": "node:head-8",
+                    "kind": "node",
+                    "label": "扫频头",
+                    "online": True,
+                    "busy": False,
+                    # 端点表里塞一份"能力"：平台一个字都不许从这里取
+                    "capabilities": {"levels": False, "rawiq": True},
+                    "fw_version": "从端点表偷来的",
+                }
+            ],
+            Settings(max_nodes_per_gateway=8),
+        )
+    out = client.get("/api/nodes/8").json()
+    assert out["fw_version"] is None, "端点表里那句 fw_version 一个字都不许进账"
+    assert out["capabilities"]["rawiq"]["supported"] is False
+    assert out["capabilities"]["spectrum"]["max_bins"] == 512
+
+
+def test_put_rejects_a_declaration_that_is_not_an_object(chain, client):
+    """不是对象的声明会渲染成 `not_an_object` 且全部 unsupported——那就写进去一份
+    读不出来的东西。入侧就拒，比让页面显示"声明有问题"诚实。"""
+    chain["add"]("起点塔", 9, "a", "usb-native", "/dev/a")
+    assert client.put("/api/nodes/9", json={"capabilities": [1, 2]}).status_code == 422
+
+
+def test_the_aggregator_cannot_declare(chain, client, db_path):
+    """声明是改这台实例看到的东西，只在场地实例上写（与另外 21 个写端点同口径）。"""
+    from fastapi.testclient import TestClient
+
+    from app.config import Settings
+    from app.main import create_app
+
+    chain["add"]("起点塔", 10, "a", "usb-native", "/dev/a")
+    reader = TestClient(
+        create_app(Settings(db_path=db_path, dialer_enabled=False, instance_role="aggregator"))
+    )
+    row = reader.put("/api/nodes/10", json={"capabilities": {"levels": True}})
+    assert row.status_code == 405, (row.status_code, row.text)
+    assert row.json()["detail"]["reason"] == "aggregator_read_only"

@@ -128,6 +128,18 @@ class NodeOut(BaseModel):
     stops_rh: bool
 
 
+class NodeDeclaration(BaseModel):
+    """`PUT /api/nodes/{id}` 的入参：只有这三列，全部由操作员显式声明。
+
+    没有 `capabilities_json: str` 这种"把 JSON 塞进字符串"的形状——那是把校验推给
+    服务端猜。类型本身就是对象，Pydantic 直接拒掉 `[1,2]` 与 `"{}"`。
+    """
+
+    capabilities: dict | None = None
+    fw_version: str | None = Field(default=None, max_length=64)
+    protocol_version: int | None = Field(default=None, ge=0, le=255)
+
+
 # --- S4：设置系统与布局 -------------------------------------------------------
 
 

@@ -6,15 +6,17 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..deps import get_session
+from ..deps import get_session, require_writable_session
 from ..models import Gateway, Node, Relay
-from ..schemas import NodeOut
+from ..schemas import NodeDeclaration, NodeOut
 from ..services.capabilities import render_capabilities, stops_rotorhazard
-from ..services.hierarchy import not_found
+from ..services.hierarchy import flush_or_conflict, get_or_404, not_found
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
@@ -67,4 +69,26 @@ def read_node(node_id: int, session: Session = Depends(get_session)) -> NodeOut:
     row = session.execute(_query().where(Node.node_id == node_id)).first()
     if row is None:
         raise not_found("node", node_id)
+    return as_out(*row)
+
+
+@router.put("/{node_id}", response_model=NodeOut)
+def declare_node(
+    node_id: int, body: NodeDeclaration, session: Session = Depends(require_writable_session)
+) -> NodeOut:
+    """能力/版本 = 操作员声明，唯一写入口。
+
+    `reconcile()`（services/ingest.py:85）从不碰这三列，所以这一行不会被下一轮端点
+    对账冲掉；反过来，这里也**一个字都不从帧或端点表取**——按帧回填是 spec §1 明确
+    否决过的形态：帧里没有"这块板能不能发 RAWIQ"这种事实，只有它今天发了什么。
+    """
+    node = get_or_404(session, Node, node_id, "node")
+    if body.capabilities is not None:
+        node.capabilities_json = json.dumps(body.capabilities, ensure_ascii=False, sort_keys=True)
+    if body.fw_version is not None:
+        node.fw_version = body.fw_version
+    if body.protocol_version is not None:
+        node.protocol_version = body.protocol_version
+    flush_or_conflict(session, "node_declaration")
+    row = session.execute(_query().where(Node.node_id == node_id)).first()
     return as_out(*row)
