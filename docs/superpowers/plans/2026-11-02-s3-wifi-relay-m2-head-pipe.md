@@ -1419,6 +1419,13 @@ Expected: 两条 FAIL，`KeyError: 'endpoint_stats'`。`Link` 本文件 `:42` �
 Run: `cd repo/rftrack/backend && python -m pytest -q --junit-xml=/tmp/w58-probe/m2-pytest.xml`
 Expected: 全绿、1 skipped（唯一 skip 仍是 `test_settings_isolation.py:258`），总数 = 587 + 2。
 
+**执行期实测（2026-11-02）**：`tests=614 failures=0 errors=0 skipped=1 time=89.9s`（89.9 s 里含 Task 8 追加的 24 条 rechunk 用例）。算术要对上：基线 588（587+1 skip）→ Task 8 加 24 → 612 → 本任务加 2 → **614**。上面那句"587 + 2"写在 Task 8 之前，漏算了那 24 条，不是少跑了。唯一 skip 仍是 `test_settings_isolation.py` 的 `test_deleting_a_tile_clears_its_subscriptions`。
+
+两处**对计划的偏离**，都有明确理由：
+
+1. `_refresh_endpoints()` 只挂在 **`_drain()` 与 `_forget_endpoint()`** 两处，没有跟着 `_offer()`/`_queue_for()` 的 `_refresh_queues()` 一起挂。`_endpoints` 只在这两处变（新建在 `_process` 里、删除在 `_forget_endpoint` 里），而 `_process` 只在 `_drain` 里被调——另两处挂上去是热路径上的空转，换不来任何新鲜度。两处都做了变异自证：删掉任一处，`test_endpoint_detail_names_which_link_a_frame_came_from` 都会 FAIL（不是靠断言"看起来有键"）。
+2. 快照里 `crc_errors`/`resync_bytes` 取的是 `endpoint.stream.*` 的**生命周期累计**，而不是折进全局后 `_Endpoint.crc_seen` 那一截。明细回答的是"**这条流**一共坏了多少"，与全局用增量折算是两件事；两者混用会让一条断过的流在明细里显示 0。
+
 - [ ] **Step 5: 提交**
 
 ```bash
