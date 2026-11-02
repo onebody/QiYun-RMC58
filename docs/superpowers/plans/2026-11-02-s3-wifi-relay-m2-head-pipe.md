@@ -786,6 +786,14 @@ cd repo/firmware && /Users/fcj/.local/bin/pio run -e esp32s3-relay 2>&1 | tail -
 ```
 Expected: `SUCCESS`，且 `0`（扫描 env 里不存在这个对象文件——这条是「编译期隔离优先」的真判据，不是注释）。
 
+**执行期更正（2026-11-02，三处）**
+
+1. **Step 4 依赖 Task 6 Step 2 的两把 NVS 键**：`prefs.tx/prefs.rx` 在 `net_prefs_t` 里还不存在，照原文顺序写会编不过。把 Task 6 Step 2（struct 两字段 + load/store/erase 三处）**提前到本任务**——它是 8 行的纯加项，`tx=rx=0` 时 `uart_link_open(0,0)` 走编译默认对，行为与没有这两个字段时一致；Task 6 只剩 Step 1/3/4/5。
+2. **`uart_link_open` 的短路有真 bug**（Task 3 留下的）：原写法 `if (tx==pin_tx && rx==pin_rx) return installed;` 在 boot 时 `installed==false`，而 boot 正是"用默认对开一次"，于是**中继永远装不上 head 驱动**（只有给一个非默认对才会装）。改成 `if (installed && tx==pin_tx && rx==pin_rx) return true;`。这条不改，M2 的 head 侧一行字节都收不到。
+3. **chunk 缓冲从栈移到 BSS**：`uint8_t chunk[1024]` 放在 pipe 任务里（`static` 函数局部，仅一个读者），4096 的栈不再被自己的缓冲吃掉四分之一。中继 env 有 72 KiB 链路队列，1 KB 的 BSS 不是成本。
+
+**本机踩到的第二条 penv 坑（与 Task 4 那条不同）**：`pio run -e esp32s3-relay` 在无代理时报 `Error: Failed to install Python dependencies into penv`（penv_setup.py:664，它先探网络再 `uv pip install`），**加 `http(s)_proxy=http://127.0.0.1:7897` 就过**；`esp32s3`/`esp32c5` 两个 env 同一次会话里不需要代理，因为它已经不需要重装依赖。别把这条当成"平台包坏了"去动 `~/.platformio`。
+
 - [ ] **Step 6: 提交**
 
 ```bash
