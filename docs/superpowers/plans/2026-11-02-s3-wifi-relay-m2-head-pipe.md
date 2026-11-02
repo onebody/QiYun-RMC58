@@ -222,6 +222,7 @@ git commit -m "feat(firmware): derive UART pacing from line rate, pinned to the 
 **Files:**
 - Modify: `firmware/src/proto/uart_link.h`（全文重写）
 - Modify: `firmware/src/proto/uart_link.c:1-76`
+- Modify: `firmware/platformio.ini:40`（`[env:esp32s3-relay]` 的 head 波特率，见 Step 2b）
 
 `link.c:99-104` 那处无条件的 `uart_link_init()` **不改**：中继支里它返回 false，`link_ready(LINK_UART)` 走 `uart_link_ready()`，真正开驱动的是 main.c 读完 NVS 之后的 `uart_link_open()`（Task 5 Step 4）。在中继 env 里提前装 43/44 反而会抢掉一次"引脚还没定"的安装。
 
@@ -453,6 +454,18 @@ unsigned uart_link_tx_ring_bytes(void) { return 0; }
 #endif
 ```
 
+- [ ] **Step 2b: 中继 env 必须把 head 波特率钉在 921600（2026-11-02 执行时补入计划）**
+
+`[env:esp32s3-relay]` 今天只有 `-DRX_TARGET_S3=1 -DRX_WIFI_RELAY=1`（`platformio.ini:40`）。Step 2 的 `#ifndef UART_LINK_BAUD / #define UART_LINK_BAUD 115200` 对它成立 ⇒ **中继会按 115200 装 head 的 UART，而 M2 的 C5 头是 `[env:esp32c5-head]` 的 921600**——两端都"在跑"，收到的全是乱码，`crc_errors` 一路涨，看起来像飞线质量问题。这是 M2 数据面的第一号坑，必须在计划里显式写死。
+
+`firmware/platformio.ini` 的 `[env:esp32s3-relay]` 那行 build_flags 改成：
+
+```ini
+build_flags = -DRX_TARGET_S3=1 -DRX_WIFI_RELAY=1 -DUART_LINK_BAUD=921600
+```
+
+并注明两端是一对：`esp32c5-head`(921600) ↔ `esp32s3-relay`(921600)，`esp32c5`(115200) ↔ Pi 的 ②a 路。波特率**不做**运行时可配——引脚之所以运行时可配是"芯片层给不出排针表"（§8.1），波特率不是未知量，spec §3 已经把它定成 M2 的固定搭配；再加一个 NVS 键只会多出一处"两端忘了配对齐"的机会。判据：`NET STATUS` 的 `head_baud` 必须是 `921600`（Task 14 的 L2 前置检查读它）。
+
 - [ ] **Step 3: 三个 env 都编译**
 
 Run:
@@ -482,7 +495,7 @@ git commit -m "feat(firmware): three-way uart_link - C5 sink, relay head link, s
 
 **Files:**
 - Modify: `firmware/src/scan/scanner.c:662-678`
-- Modify: `firmware/src/proto/commands.c:471-480`
+- Modify: `firmware/src/proto/commands.c:471-480`（PROTOCOL MONITOR 的 bins 钳位）与 `:580-582`（`SPEC` 命令的同第二处，见 Step 2b）
 - Modify: `firmware/platformio.ini`（`[env:esp32c5]` 之后插入新 env）
 
 - [ ] **Step 1: scanner.c 用线路速率**
@@ -557,6 +570,31 @@ static uint32_t uart_stream_cap(const scan_config_t *c, const plan_t *plan) {
 ```
 
 并在 `commands.c` 顶部 include 段加 `#include "line_pace.h"`。
+
+- [ ] **Step 2b: 同一个钳位的第二处——`SPEC` 命令（2026-11-02 执行时补入计划）**
+
+`commands.c:582` 是**另一个**写死的 512，注释还把它说成"link.c 的帧缓冲顶到 512-bin"，但 `link.c:43` 的 `FRAME_UART_MAX` 实为 `frame_header_t + frame_spectrum_t + 1024 + 4`——缓冲能吃下 **1024** bins，512 从来只是 @115200 的**节拍选择**。这一段不改，921600 的头就永远只能在 `PROTOCOL MONITOR` 那条路上拿到 992、操作员随后一句 `SPEC 4 992 MAX` 又被打回 512（且 `b <= 1024` 的入参校验本来就放行）。
+
+`commands.c:580-582` 从
+
+```c
+        /* SPEC <every_n_hops (0=off)> <bins> <span_hz one-sided> <MAX|MEAN> */
+        /* The UART frame buffer (link.c) tops out at 512-bin spectra. */
+        if ((sink == LINK_UART || link_frame_sink() == LINK_UART) && b > 512) b = 512;
+```
+
+改成
+
+```c
+        /* SPEC <every_n_hops (0=off)> <bins> <span_hz one-sided> <MAX|MEAN> */
+        /* Same clamp as PROTOCOL MONITOR, same derivation: what the line and the
+         * TX ring allow, which at 115200 is still 512. The buffer itself holds
+         * 1024 bins (link.c: FRAME_UART_MAX), so this number is pacing, not fit. */
+        const uint16_t bins_ceiling = pace_spec_bins(uart_link_line_rate(), uart_link_tx_ring_bytes());
+        if ((sink == LINK_UART || link_frame_sink() == LINK_UART) && b > bins_ceiling) b = bins_ceiling;
+```
+
+`pace_spec_bins` 与 `uart_link_*` 在 Step 1/2 已经 include 过，这里不新增头文件依赖。
 
 - [ ] **Step 3: 新 env**
 
