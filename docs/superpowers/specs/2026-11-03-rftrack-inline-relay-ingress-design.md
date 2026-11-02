@@ -104,6 +104,21 @@ IP / BSSID **不落库**（脱敏约束）；要表达可达性就用 `sta_state
 
 读侧：`GET /api/nodes` 只对 `transport_kind="wifi-relay"` 的行附带一份 `relay_link`，工作台与 `/app/` 页面各自渲染成 NET 卡片。
 
+### 1.5 两处连带点（设计初稿漏了，第二遍自查补上）
+
+**(a) `BridgeEndpointResolver` 必须同样认 inline，否则健康中继会刷出永久错误。**
+采集侧也照桥的 `/api/endpoints` 认领地址：`capture.py:240-241` 调 `bridge_url(gateway, ENDPOINTS_PATH)`，而 `bridge_url` 在 `base_url` 为空时直接 `raise conflict("no_base_url")`（`dialer.py:115-116`）。inline 接入机正是 `base_url=NULL`。这个异常会被 `_table()` 末尾那条宽 `except Exception`（`capture.py:254`）吞成 `failures += 1` + `last_error`，于是**一块完全正常的 Wi-Fi 中继会在采集健康里永久报错**——正是"把可选件缺失报成 degraded，运营者就会开始忽略 degraded"那个口味要避免的事。
+
+定法：inline 网关在 resolver 里走**恒等映射**（`node:<key> → node:<key>`，不发 HTTP）。这不是兜底，而是事实：`endpoint_addr()` 对没有 `path` 的远端条目本来就落回 `id`（`ingest.py:69`），而 inline 的 `ep` 与 `transport_addr` 是同一个串。
+
+**(b) 聚合 `/api/endpoints` 的部分失败口径。**
+今天单网关版在一台不可达时是 `_unreachable(...)` 抛错（`routers/bridge.py:54-56`）。聚合版必须改口径：**一台接入机连不上就只贡献 0 条，绝不让整张列表 500 或拖到超时**。理由与 resolver 的注释同一条（"一次网络抖动不该让已经归好属的端点退回未归属"，`capture.py:217-218`）——页面轮询拿到空列表，效果就是 §3.1 那个"服务器没有板也没有中继节点"的旧故障复活。
+
+配套口径：inline 条目永远从内存出、**零 HTTP**；非 inline 仍沿用今天的逐个 live fetch，不引入新的缓存层（`max_gateways=8` 是既有硬闸，`probe_timeout_s=3.0` 是既有上限，最坏 24 s 只在"8 台全死"这种本来就没数据的时刻出现——加缓存是为假想需求买单）。
+
+**(c) inline 的 `dial_state` 由同一条 `_probe` 分派写。**
+`probe_gateway` 会写 `dial_failures/dial_state/last_seen`（`dialer.py:172-181`）。inline 分派必须写同样的字段，这样 `/api/health` 的 `never_probed` 不会把这条 seed 出来的接入机长期算成"没测过"，健康侧无需新增分支。`max_gateways`（`config.py:68`，默认 8）里 inline 占一格，如实计入。
+
 ## 2. 上行管道与遥测
 
 ### 2.1 `/node` 监听落在后端进程里
@@ -167,7 +182,7 @@ A 的真实代价必须摆在桌面上：**页面长期持有写权时，Wi-Fi �
 
 ### 3.2 两条别名
 
-**`GET /api/endpoints`（不带 `?gateway=`）= 全场聚合**：每台非 inline 接入机各取自己那份，加上 inline 那行的 `relay_hub.endpoints()`，每条过一遍现成的 `advertise()`（`ingest.py:165-178`，补 `gateway_id` / `medium` / `stops_rh`）。显式带 `?gateway=` 时保持今天的严格 422/404 不变——只有"完全不带参"才新增聚合语义。
+**`GET /api/endpoints`（不带 `?gateway=`）= 全场聚合**：每台非 inline 接入机各取自己那份，加上 inline 那行的 `relay_hub.endpoints()`，每条过一遍现成的 `advertise()`（`ingest.py:165-178`，补 `gateway_id` / `medium` / `stops_rh`）。显式带 `?gateway=` 时保持今天的严格 422/404 不变——只有"完全不带参"才新增聚合语义。部分失败（一台不可达不得拖垮整张列表）与 inline 零 HTTP 的口径见 §1.5b。
 
 **`WS /serial?ep=<id>&gateway=<n>` = `/ws/bridge/{ep}` 的别名**：内部直接叫同一个 `BridgeHub.serve()`，不复制管道。
 
@@ -230,6 +245,9 @@ A 的真实代价必须摆在桌面上：**页面长期持有写权时，Wi-Fi �
 | 11 | 拒入限流 | 同 `node_key` 在 60 s 内洪水 → 只落一行；跨窗口再来才第二行 |
 | 12 | 脱敏 | `/api/relay-nodes`、`/denied`、日志三处无 SSID/口令/公网 IP；`remote_addr` 只在局域网段且按既有规则渲染 |
 | 13 | 回滚闸 | `RFTRACK_RELAY_ENABLED=0` 下 §4.1 那三条断言成立，其余门槛不受影响 |
+| 14 | 采集侧不刷假错误 | inline 节点在线且无任何 bridge 客户端：跑一段时间后 `capture` 健康里的 `endpoint_resolver.failures` **不因 inline 网关增长**、`last_error` 不含 `no_base_url`（§1.5a 的回归锁） |
+| 15 | 聚合列表部分失败 | 造一台不可达的非 inline 接入机 + 一条在线 inline：无参 `/api/endpoints` 仍 200、仍含 inline 那行，不可达那台贡献 0 条（§1.5b） |
+| 16 | inline 的拨号账 | inline 网关的 `dial_state` 会被 `_probe` 分派写成 `online`、`last_seen` 前进，`/api/health` 的 `never_probed` 不含它（§1.5c） |
 
 ### 4.3 五套门槛 + 两道真机门槛
 
@@ -254,7 +272,8 @@ A 的真实代价必须摆在桌面上：**页面长期持有写权时，Wi-Fi �
 | 新增 | `rftrack/backend/alembic/versions/007_inline_relay.py`（现有最大号为 `006_targets`，`007_aggregate` 属 S11 尚未建） |
 | 新增 | `rftrack/backend/app/services/relay_hub.py`（`/node` 侧：准入、registry、`RelayUpstream`、采样客户端） |
 | 修改 | `rftrack/backend/app/services/ws_bridge.py`（`inline://` 分派、`_Session.sticky`、`resolve_link` 认 inline） |
-| 修改 | `rftrack/backend/app/services/dialer.py`（`_probe` 对 `kind=="inline"` 走 `relay_hub.endpoints()`） |
+| 修改 | `rftrack/backend/app/services/dialer.py`（`_probe` 对 `kind=="inline"` 走 `relay_hub.endpoints()`，并写 `dial_state`/`last_seen`——见 §1.5c） |
+| 修改 | `rftrack/backend/app/services/capture.py`（`BridgeEndpointResolver._table` 对 inline 走恒等映射，不发 HTTP——见 §1.5a） |
 | 修改 | `rftrack/backend/app/services/ingest.py`（`TRANSPORT_BY_KIND` += `"relay": "wifi-relay"`） |
 | 修改 | `rftrack/backend/app/routers/bridge.py`（无参 `GET /api/endpoints` 聚合） |
 | 新增 | `rftrack/backend/app/routers/relay_nodes.py`（`/api/relay-nodes` 白名单 CRUD + `/denied` + `/{key}/status`；前缀理由见 §1.2——`/api/relays` 已被 site→relay→gateway 的子场地 CRUD 占用） |
@@ -271,6 +290,7 @@ A 的真实代价必须摆在桌面上：**页面长期持有写权时，Wi-Fi �
 | 条目 | 档位 |
 |---|---|
 | §0 两条缺口的根因 | **[已由源码确认]**（逐条 file:line） |
+| §1.5 两处连带点（resolver 的 `no_base_url` 会被宽 except 吞成永久 `failures`；`bridge_url` 空 `base_url` 直接抛） | **[已由源码确认]**（`capture.py:240-241`/`254`、`dialer.py:115-116`、`routers/bridge.py:54-56`） |
 | §1.1/§1.2/§1.4/§2.1/§2.2/§2.3/§3.2/§3.5 的行为断言 | **[根据源码推断]**——设计期，实现尚未存在 |
 | §3.4「原页面连 `serve.mjs` 时显示占用中」 | **[已由真机实测]**（2026-11-02 浏览器手测） |
 | §4.4 假设"频谱帧缺失由单消费者锁造成" | **[当前无法确认]**，须在 §4.3 那条浏览器冒烟里判定 |
