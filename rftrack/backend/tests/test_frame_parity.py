@@ -241,3 +241,37 @@ def test_the_version_byte_is_not_validated_by_anybody():
 def test_the_type_codes_are_the_ones_frames_h_declares(name, type_code):
     """类型码写错一位，对拍会"全绿但解错帧"——所以把码也钉住。"""
     assert CASES[name]["type"] == type_code
+
+
+@pytest.mark.parametrize("name", STREAM_NAMES)
+@pytest.mark.parametrize("rechunk", [1, 7, 1024])
+def test_rechunking_a_stream_changes_nothing(name, rechunk):
+    """中继的字节管道按 UART 一次读到的块切（relay_pipe.c 的 PIPE_CHUNK=1024），
+    一条帧可以跨过两个 WS 二进制帧——所以"块怎么切"必须不影响"解出什么"。
+
+    期望值仍然取 TS 导出的那一份（`want["items"]` / `want["counters"]`），**不是**
+    把整块喂一次让实现自己的输出当期望：那样这条用例只能证明解析器自洽，证明不了
+    它与设备切块相容。夹具来自权威、切块来自设备，两条叠起来才是管道的地基。
+    """
+    want = STREAMS[name]
+    blob = b"".join(bytes.fromhex(c) for c in want["feed"])
+    stream = FrameStream()
+    got = []
+    for i in range(0, len(blob), rechunk):
+        for item in stream.push(blob[i : i + rechunk]):
+            got.append(
+                {"kind": "text", "line": item.line}
+                if item.kind == "text"
+                else {
+                    "kind": "frame",
+                    "type": item.type,
+                    "payload_hex": item.payload.hex(),
+                    "payload_len": len(item.payload),
+                }
+            )
+    assert got == want["items"], f"{name} @ {rechunk}B"
+    assert (stream.crc_errors, stream.resync_bytes, stream.bytes_in) == (
+        want["counters"]["crcErrors"],
+        want["counters"]["resyncBytes"],
+        want["counters"]["bytes"],
+    )
