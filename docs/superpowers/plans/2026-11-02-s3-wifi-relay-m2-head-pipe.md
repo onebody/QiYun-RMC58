@@ -792,7 +792,7 @@ Expected: `SUCCESS`，且 `0`（扫描 env 里不存在这个对象文件——�
 2. **`uart_link_open` 的短路有真 bug**（Task 3 留下的）：原写法 `if (tx==pin_tx && rx==pin_rx) return installed;` 在 boot 时 `installed==false`，而 boot 正是"用默认对开一次"，于是**中继永远装不上 head 驱动**（只有给一个非默认对才会装）。改成 `if (installed && tx==pin_tx && rx==pin_rx) return true;`。这条不改，M2 的 head 侧一行字节都收不到。
 3. **chunk 缓冲从栈移到 BSS**：`uint8_t chunk[1024]` 放在 pipe 任务里（`static` 函数局部，仅一个读者），4096 的栈不再被自己的缓冲吃掉四分之一。中继 env 有 72 KiB 链路队列，1 KB 的 BSS 不是成本。
 
-**本机踩到的第二条 penv 坑（与 Task 4 那条不同）**：`pio run -e esp32s3-relay` 在无代理时报 `Error: Failed to install Python dependencies into penv`（penv_setup.py:664，它先探网络再 `uv pip install`），**加 `http(s)_proxy=http://127.0.0.1:7897` 就过**；`esp32s3`/`esp32c5` 两个 env 同一次会话里不需要代理，因为它已经不需要重装依赖。别把这条当成"平台包坏了"去动 `~/.platformio`。
+**本机踩到的第二条 penv 坑（与 Task 4 那条不同）**：`pio run -e esp32s3-relay` 报 `Error: Failed to install Python dependencies into penv`（penv_setup.py:664）——它先探 443 通不通，再 `uv pip install` 补 `python_deps` 表里缺的包。**PyPI 到不了就死在这一步，而这一步与编译无关**。正解是 `PLATFORMIO_OFFLINE=1 pio run …`（penv_setup.py:76 明确支持这个变量，打印 "No internet connection detected, Python dependency check will be skipped" 后照常构建，2026-11-02 在 esp32s3/esp32s3-relay 上各实测一次成功）。挂代理只在代理真开着时管用——本会话里它在 15:5x 之后就不监听了，同一条命令于是从 SUCCESS 翻成 FAILED，这是**唯一一处会随网络翻转的构建判据**，别把它当成"平台包坏了"去动 `~/.platformio`。
 
 - [ ] **Step 6: 提交**
 
@@ -853,6 +853,8 @@ static bool rh_allowed(const char *line) {
 ```
 
 - [ ] **Step 2: net_prefs 多两把键**
+
+> **执行期（2026-11-02）：这一步已随 Task 5 落地**——`main.c` 的 `uart_link_open(prefs.tx, prefs.rx)` 要用到它，留在本任务里编不过。struct 字段、load/store/erase 三处都在 `71c2688`。本任务从 Step 3 开始。
 
 `net_prefs.h` 的 struct 末尾（`bool on;` 之前）加：
 
@@ -1082,6 +1084,10 @@ cd repo/firmware && grep -n "static char why\|char why\[" src/net/ws_link.c; \
   /Users/fcj/.local/bin/pio run -e esp32s3-relay 2>&1 | tail -3
 ```
 Expected: `why` 是 `static char why[24]`（或更大），`SUCCESS`。若 `why` 小于 `"no_ip"`+NUL 之外的余量，把它的尺寸写进 Step 3 的提交信息而不是悄悄扩容。
+
+**执行期实测（2026-11-02）**：`why` 是 `static char why[40]`（ws_link.c:55），无需扩容；`up[200]→up[256]` 已改。
+**一处偏离原文**：`sta_reason`/`sta_downs` 的赋值套在 `if (want_up)` 里。`ws_link_stop()` 先清 `want_up` 再 `esp_wifi_disconnect()`，而这条事件正是那次断开带回来的——不加这道判断，操作员每次 NET OFF 都会看到一个"失败原因码"和一个涨了的计数，而那恰恰是他刚要求的事。真掉线（`want_up` 仍为 true）照常计数，`why` 那条不受影响。
+**构建判据**：本任务的 `SUCCESS` 是在 `PLATFORMIO_OFFLINE=1` 下取得的（见 Task 5 那条坑）；判据除 `SUCCESS` 外补了镜像字符串检查——`sta_reason` ×3、`no_ip` ×1，证明改的是进镜像的那份而不是被 `#if` 挡掉的那份。
 
 - [ ] **Step 5: 提交**
 
