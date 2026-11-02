@@ -10,6 +10,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "frames.h"
+#include "line_pace.h"
 #include "link.h"
 #include "metrics.h"
 #include "psd.h"
@@ -17,6 +18,7 @@
 #include "rh.h"
 #include "scanner.h"
 #include "status_led.h"
+#include "uart_link.h"
 
 #define FLOOR_PERCENTILE 0.2f
 #define TELEMETRY_US 250000
@@ -661,8 +663,9 @@ static bool throttle_until(int64_t due) {
 
 /* Rotation cap that keeps a frame stream on the UART inside the line rate:
  * the budget divided by the bytes one rotation emits (a metrics/levels frame
- * per hop, a spectrum every spec_every hops). 0 = unrestricted. */
-#define UART_STREAM_BUDGET 9000 /* B/s, inside 115200 8N1's ~11.5 KB/s */
+ * per hop, a spectrum every spec_every hops). 0 = unrestricted. The budget is
+ * no longer 9000 by fiat: it is line_pace's share of whatever the line
+ * actually runs at, so a 921600 head is paced for 921600. */
 static uint32_t uart_stream_cap(const scan_config_t *c, const plan_t *plan) {
     if (!c->uart_pace) return 0;
     unsigned maxch = 0;
@@ -674,7 +677,8 @@ static uint32_t uart_stream_cap(const scan_config_t *c, const plan_t *plan) {
                          : sizeof(frame_header_t) + 4 + sizeof(frame_levels_t) + maxch * sizeof(frame_level_t);
     size_t per_rot = (size_t)plan->nhops * per_hop;
     if (c->spec_every) per_rot += ((size_t)plan->nhops + c->spec_every - 1) / c->spec_every * (32 + c->spec_bins);
-    return UART_STREAM_BUDGET / per_rot;
+    const uint32_t budget = pace_budget(uart_link_line_rate());
+    return budget / per_rot;
 }
 
 static void scanner_task(void *arg) {

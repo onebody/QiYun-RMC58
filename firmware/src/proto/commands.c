@@ -30,7 +30,9 @@
 #include "commands.h"
 #include "frames.h"
 #include "gpio_out.h"
+#include "line_pace.h"
 #include "link.h"
+#include "uart_link.h"
 #include "metrics.h"
 #include "radio.h"
 #include "scanner.h"
@@ -471,11 +473,15 @@ static void handle(char *line, link_sink_t sink) {
         if (monitor && sink == LINK_UART) {
             /* Pace the stream to the line rate and clamp spectra so the
              * largest frame fits link.c's UART buffer. Applies to the config
-             * that is current now, whichever branch set_proto took. */
+             * that is current now, whichever branch set_proto took.
+             * Both limits come from the baud now; at 115200 they evaluate to
+             * the 512 this used to hard-code (test/test_pace), so the Pi's
+             * RotorHazard line is unaffected by a 921600 head existing. */
             scan_config_t c;
             scanner_get_config(&c);
+            const uint16_t bins = pace_spec_bins(uart_link_line_rate(), uart_link_tx_ring_bytes());
             c.uart_pace = true;
-            if (c.spec_bins > 512) c.spec_bins = 512;
+            if (c.spec_bins > bins) c.spec_bins = bins;
             scanner_set_config(&c);
         }
         /* One rule instead of two special cases: the frames go back out the
@@ -578,8 +584,11 @@ static void handle(char *line, link_sink_t sink) {
     } else if (sscanf(line, "SPEC %" SCNu32 " %" SCNu32 " %" SCNu32 " %31s %c", &a, &b, &d, arg2, &extra) == 4 &&
                a <= 255 && b >= 16 && b <= 1024 && (!strcmp(arg2, "MAX") || !strcmp(arg2, "MEAN"))) {
         /* SPEC <every_n_hops (0=off)> <bins> <span_hz one-sided> <MAX|MEAN> */
-        /* The UART frame buffer (link.c) tops out at 512-bin spectra. */
-        if ((sink == LINK_UART || link_frame_sink() == LINK_UART) && b > 512) b = 512;
+        /* Same clamp as PROTOCOL MONITOR, same derivation: what the line and the
+         * TX ring allow, which at 115200 is still 512. The buffer itself holds
+         * 1024 bins (link.c: FRAME_UART_MAX), so this number is pacing, not fit. */
+        const uint16_t bins_ceiling = pace_spec_bins(uart_link_line_rate(), uart_link_tx_ring_bytes());
+        if ((sink == LINK_UART || link_frame_sink() == LINK_UART) && b > bins_ceiling) b = bins_ceiling;
         c.spec_every = (uint8_t)a;
         c.spec_bins = (uint16_t)b;
         c.spec_span_hz = d;
