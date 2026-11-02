@@ -53,6 +53,13 @@ static volatile bool want_up;
 static volatile uint32_t rx_drops;
 static uint32_t backoff_ms = BACKOFF_MIN_MS;
 static char why[40]; /* the last thing that happened, for NET STATUS */
+/* The driver's own words about why the station is not up. M1's last run left
+ * `sta:false` with `why:""` for minutes: on_wifi_event took `void *data` and
+ * threw the disconnect reason away, and the dial task never wrote `why` while
+ * it waited for an IP. Two counters, not one string, because the reason code is
+ * the driver's and `why` is ours - overwriting one with the other loses both. */
+static volatile uint8_t sta_reason;
+static volatile uint32_t sta_downs;
 
 static void set_why(const char *text) {
     strlcpy(why, text, sizeof(why));
@@ -60,14 +67,25 @@ static void set_why(const char *text) {
 
 static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data) {
     (void)arg;
-    (void)data;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
+        const wifi_event_sta_disconnected_t *d = (const wifi_event_sta_disconnected_t *)data;
+        /* Only a link we still wanted is a failure. NET OFF clears want_up
+         * before it disconnects, and this event follows that call: counting it
+         * would leave the relay reporting a reason code for the thing the
+         * operator just asked for. */
+        if (want_up) {
+            sta_reason = d ? d->reason : 0;
+            sta_downs++;
+        }
         sta_up = false;
         /* Reconnection is the driver's own job: a second retry loop here would
          * keep interrupting it. want_up only gates it so NET OFF stays off. */
         if (want_up) esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         sta_up = true;
+        sta_reason = 0; /* an association that worked is not a failure to explain */
+    } else {
+        (void)data;
     }
 }
 
@@ -381,6 +399,10 @@ static void dial_task_fn(void *arg) {
     for (;;) {
         while (!want_up) vTaskDelay(pdMS_TO_TICKS(50));
         if (!sta_up) {
+            /* `why` is the dial loop's field, and the dial loop never ran: say
+             * so instead of leaving an empty string that reads like "fine".
+             * Only the first pass writes it - sta_reason carries the detail. */
+            if (!why[0]) set_why("no_ip");
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
@@ -429,6 +451,7 @@ bool ws_link_stop(void) {
     want_up = false;
     for (int i = 0; i < 20 && ws_up; i++) vTaskDelay(pdMS_TO_TICKS(50));
     sta_up = false;
+    why[0] = 0; /* NET ON re-arms from a blank, so the wait gets named again */
     esp_wifi_disconnect();
     return !ws_up;
 }
@@ -481,6 +504,8 @@ void ws_link_status(char *out, size_t cap) {
     /* A JSON fragment, not a kv line: NET STATUS hands this straight to the
      * platform, and every field there is a field. why is our own literal. */
     snprintf(out, cap, "\"sta\":%s,\"ws\":%s,\"rssi\":%d,\"backoff_ms\":%" PRIu32
-                    ",\"in_drops\":%" PRIu32 ",\"why\":\"%s\"",
-             sta_up ? "true" : "false", ws_up ? "true" : "false", rssi, backoff_ms, rx_drops, why);
+                    ",\"in_drops\":%" PRIu32 ",\"why\":\"%s\",\"sta_reason\":%" PRIu8
+                    ",\"sta_downs\":%" PRIu32,
+             sta_up ? "true" : "false", ws_up ? "true" : "false", rssi, backoff_ms, rx_drops, why,
+             sta_reason, sta_downs);
 }

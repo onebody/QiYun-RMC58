@@ -790,7 +790,7 @@ static void handle(char *line, link_sink_t sink) {
         } else if (!strcmp(arg, "STATUS")) {
             /* The pass is deliberately absent: this reply goes to a log and to
              * whoever is watching the port. */
-            char up[200], head[180];
+            char up[256], head[180];
             ws_link_status(up, sizeof(up));
             relay_pipe_status(head, sizeof(head));
             reply_add("NET {\"on\":%s,\"ssid\":\"%s\",\"url\":\"%s\",\"id\":\"%s\",%s,%s,"
