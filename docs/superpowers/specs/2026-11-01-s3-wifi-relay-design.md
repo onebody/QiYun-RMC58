@@ -117,9 +117,10 @@ M1 是 M2 的严格子集，且能在 C5 缺席时独立取得真机证据——
 
 | 层 | 怎么做 | 门槛 | 能标到哪档 |
 |---|---|---|---|
-| L0 回归 | 后端 pytest · 工作台 `node --test` · 浏览器冒烟 · `cd web && npm test`（动桥时）· `pio test -e native` | 587 passed/1 skipped · 214 · 65 · 56 · native 全绿；**不许用 skip 换绿** | 已通过软件测试 |
-| L1 假中继 | Node 脚本按 `node-ws` 接 `/node?id=`，把真板录制的 C5 字节段按 37 KiB/s 分块喂进去 | 帧数>0、`crc_errors=0`、`resync_bytes=0`、`skipped_frames` 无新增类型 | **仅完成模拟测试**（写明：代码路径证据，不是无线电证据） |
+| L0 回归 | 后端 pytest · 工作台 `node --test` · 浏览器冒烟 · `cd web && npm test`（动桥时）· `pio test -e native` | 618 passed/1 skipped · 214 · 65 · 56 · native 34 全绿；**不许用 skip 换绿** | 已通过软件测试 |
+| L1 假中继 | Node 脚本按 `node-ws` 接 `/node?id=`，把真板录制的 C5 字节段按 37 KiB/s 分块喂进去 | 帧数>0、`crc_errors=0`、`resync_bytes=0`、`skipped_frames` 无新增类型。2026-11-02 实测：2,215,611 B 真 C5 录制按 `PIPE_CHUNK=1024` 分 2,164 块喂完 → **17,464 帧、`crc 0`、`resync 0`**；`skipped` 仅 `spectrum 2,871` / `telemetry 238`，都是既有类型 | **仅完成模拟测试**（写明：代码路径证据，不是无线电证据） |
 | M1 上行回环 | 中继 S3 连 AP 并拨通 `/node?id=`；页面经 `/ws/bridge/node:<id>` 发 `INFO` 与 `NET STATUS` | ≤500 ms 收到 ASCII 应答、应答走**同一条** WS；平台侧该节点 `active`；期间无假扫描帧入库 | 已通过真实硬件测试 |
+| L1.5 关联失败可见 | 拔 AP 电源线重连，或把 SSID 改成一个不存在的，随后轮询 `NET STATUS` | `why` 与 `sta_reason` **必须给得出为什么**，不许再出现 `why:""` 长时间不变 | 已通过真实硬件测试（M2 只做到代码与软件层） |
 | L2 飞线静置 | C5→S3 接好，`PROTOCOL MONITOR` 跑满 30 min，期间不碰串口、不发命令 | `crc_errors=0` **且** `resync_bytes=0`；固件 `link_drops()=0`；实测 ≥30 KiB/s（对照 ① 的 37.0 基线） | 已通过真实硬件测试 |
 | L3 断网重连 | 路由器断电 60 s 再回 | ≤30 s 内自动重连；平台侧 `offline`→`active` 回弹**一次且只一次**；重连期不出现假活（在列表但 0 帧） | 已通过真实硬件测试 |
 | L4 命令回环 | 页面经 WS 发 `PROTOCOL MONITOR` / `GAIN` / `SCAN START` | 每条 ≤500 ms 收到 ASCII 应答；应答落回**同一条** WS；不出现 `ERR uart_rh` | 已通过真实硬件测试 |
@@ -139,5 +140,7 @@ M1 是 M2 的严格子集，且能在 C5 缺席时独立取得真机证据——
 
 1. **S3 是哪块板 / 排针可用情况**：**芯片层给不出答案**——2026-11-02 实测 esptool 只报 `ESP32-S3 (QFN56) rev v0.2 / 4 MB flash / USB-Serial/JTAG`（MAC 留在 /tmp 取证里，不进仓库），而 `platformio.ini:20` 那句 "Micro" board 出自上游 `17e48d6`（Bryan Mayland, 2026-10-10），不是本机取证。已确认的约束只有：GPIO19/20 = native USB（我们的控制台，不可占），GPIO26–32 = SPI flash/PSRAM，GPIO43/44 = U0TXD/U0RXD 且中继镜像的控制台是 `CONFIG_ESP_CONSOLE_NONE=y` + `CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y`（实测 `sdkconfig.esp32s3-relay:1657/1661`，不占 43/44）。⇒ 裁定：引脚做成运行时可配（M2 计划的 `NET UART <tx> <rx>`，NVS 持久，默认 43/44），第一次接线时用「哪一对脚能收到 C5 的字节」当场判出来，而不是猜一版烧一版。
 2. **AP 凭据给法**：建议在板子自己的串口上敲 `NET SSID=` / `NET PASS=`，经 NVS 保存，不进聊天、不进仓库、不进测试夹具。
-3. 能力声明：确认按 §1 末的口径（M1/M2 如实 `unsupported`，M2 收尾补 `PUT /api/nodes/{id}`）。
+3. 能力声明：确认按 §1 末的口径（M1/M2 如实 `unsupported`，M2 收尾补 `PUT /api/nodes/{id}`）。**已落地 2026-11-02**：`PUT /api/nodes/{id}` 只收 `capabilities` / `fw_version` / `protocol_version` 三列，响应仍是 `GET` 的那一套键（不发明 `declared.source`）；`reconcile()` 从不写这三列，所以声明不会被下一轮端点对账冲掉，且平台一个字都不从端点表取能力（`test_a_declaration_survives_the_next_endpoint_sweep`）；入参不是对象直接 422，汇聚实例 405 `aggregator_read_only`。
 4. **C5 烧的是哪份固件**：已结案。2026-11-02 的 `INFO` 报 `Web-v0.10|2026-10-29T00:07:24+08:00|109,edb400d6`——`git describe` 落在 `Web-v0.10`（打在 `7bec675`，即 F1 UART 链路那版）且**无 `-N-g` 后缀**，说明就建在该提交上；末段 `109,edb400d6` 是 `radio_phy_version()`（`commands.c:419-420`），不是提交号。⇒ M2 需要给 C5 重烧一份 `[env:esp32c5-head]`（921600）；115200 那份继续是 Pi 的 ②a 路，两条不共用一个二进制。
+
+**状态（2026-11-02）**：M2 的**软件侧已完成**——`line_pace.h` 把两个 115200 字面量改成线路速率的函数（`pace_line_bytes` / `pace_budget` / `pace_spec_bins`，native `test_pace` 钉住 115200 恒等）、`uart_link` 三态化（C5 sink / 中继 head / 扫描空桩）、`relay_pipe` 按 `PIPE_CHUNK=1024` 把 head 字节原样送进既有 `LINK_WS`、`HEAD` 转发与 `NET UART` 运行时可配、`sta_reason`/`sta_downs`/`why` 落进 `NET STATUS`、新增 `[env:esp32c5-head]`（921600）；平台侧补了分块不变性（8 条 golden × 1/7/1024 切法）、L1 假中继（2.1 MB 真字节）、`capture.endpoint_stats` 按端点明细、`PUT /api/nodes/{id}`。门槛：后端 **618 passed / 1 skipped**、工作台 **214**、浏览器冒烟 **65/65**、`web` **56**、native **34**。**真机四道门槛（L2/L3/L4/L5）与 L1.5 一律未执行**——等用户把 C5↔S3 飞线接好；因此 M2 当前只能标「**已通过软件测试**」，不得写「已通过真实硬件测试」。开放项 1 的引脚裁定仍有效：第一次接线时用 `NET UART <tx> <rx>` 当场判出哪一对脚能收到字节，不猜。

@@ -66,7 +66,7 @@
 **Files:**
 - Modify: `docs/superpowers/specs/2026-11-01-s3-wifi-relay-design.md`（§8 第 1、4 两条）
 
-- [ ] **Step 1: 复核引脚约束的两条一手据**
+- [x] **Step 1: 复核引脚约束的两条一手据**
 
 Run: `cd repo/firmware && grep -nE "CONFIG_ESP_CONSOLE" sdkconfig.esp32s3-relay | head -8`
 Expected: `CONFIG_ESP_CONSOLE_NONE=y` 与 `CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y` 两行都在（43/44 未被控制台占用这条成立才继续）。
@@ -74,7 +74,7 @@ Expected: `CONFIG_ESP_CONSOLE_NONE=y` 与 `CONFIG_ESP_CONSOLE_SECONDARY_USB_SERI
 Run: `cd repo && git log -1 --format='%h %an %ad %s' --date=short -S 'Micro" board' -- firmware/platformio.ini`
 Expected: `17e48d6 Bryan Mayland 2026-10-10 …`——证明"Micro 板"是上游描述而非本机实测，D3 的理由成立。
 
-- [ ] **Step 2: 改写 §8 第 1、4 两条**
+- [x] **Step 2: 改写 §8 第 1、4 两条**
 
 把第 1 条整段替换为（保持文档其余不动）：
 
@@ -88,7 +88,7 @@ Expected: `17e48d6 Bryan Mayland 2026-10-10 …`——证明"Micro 板"是上游
 4. **C5 烧的是哪份固件**：已结案。2026-11-02 的 `INFO` 报 `Web-v0.10|2026-10-29T00:07:24+08:00|109,edb400d6`——`git describe` 落在 `Web-v0.10`（打在 `7bec675`，即 F1 UART 链路那版）且**无 `-N-g` 后缀**，说明就建在该提交上。末段 `109,edb400d6` 是 `radio_phy_version()`（`commands.c:419-420`），不是提交号。⇒ M2 需要给 C5 重烧一份 `[env:esp32c5-head]`（921600）；115200 那份继续是 Pi 的 ②a 路。
 ```
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 cd repo && git add docs/superpowers/specs/2026-11-01-s3-wifi-relay-design.md
@@ -104,7 +104,7 @@ git commit -m "docs(relay): close spec open items 1 and 4 with measured evidence
 - Create: `firmware/test/test_pace/test_main.c`
 - Modify: `firmware/test/test_pace/` 是新目录，`pio test` 按 `test/test_*` 自动收
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 Create `firmware/test/test_pace/test_main.c`:
 
@@ -158,12 +158,12 @@ int main(void) {
 }
 ```
 
-- [ ] **Step 2: 跑到它失败**
+- [x] **Step 2: 跑到它失败**
 
 Run: `cd repo/firmware && /Users/fcj/.local/bin/pio test -e native 2>&1 | tail -20`
 Expected: 编译失败 `fatal error: ../../src/proto/line_pace.h: No such file or directory`。
 
-- [ ] **Step 3: 写实现**
+- [x] **Step 3: 写实现**
 
 Create `firmware/src/proto/line_pace.h`:
 
@@ -203,12 +203,12 @@ static inline uint16_t pace_spec_bins(uint32_t baud, uint32_t tx_ring_bytes) {
 }
 ```
 
-- [ ] **Step 4: 跑到通过**
+- [x] **Step 4: 跑到通过**
 
 Run: `cd repo/firmware && /Users/fcj/.local/bin/pio test -e native 2>&1 | tail -12`
 Expected: 全绿，且总数从 M1 的 **29** 变成 **34**（`test_pace` 5 条）。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd repo && git add firmware/src/proto/line_pace.h firmware/test/test_pace/test_main.c
@@ -226,7 +226,7 @@ git commit -m "feat(firmware): derive UART pacing from line rate, pinned to the 
 
 `link.c:99-104` 那处无条件的 `uart_link_init()` **不改**：中继支里它返回 false，`link_ready(LINK_UART)` 走 `uart_link_ready()`，真正开驱动的是 main.c 读完 NVS 之后的 `uart_link_open()`（Task 5 Step 4）。在中继 env 里提前装 43/44 反而会抢掉一次"引脚还没定"的安装。
 
-- [ ] **Step 1: 重写头文件**
+- [x] **Step 1: 重写头文件**
 
 `firmware/src/proto/uart_link.h` 全文替换为：
 
@@ -262,7 +262,7 @@ bool uart_link_open(int tx, int rx);
 void uart_link_pins(int *tx, int *rx);
 ```
 
-- [ ] **Step 2: 把 uart_link.c 改成三支**
+- [x] **Step 2: 把 uart_link.c 改成三支**
 
 `firmware/src/proto/uart_link.c` 全文替换为：
 
@@ -454,7 +454,7 @@ unsigned uart_link_tx_ring_bytes(void) { return 0; }
 #endif
 ```
 
-- [ ] **Step 2b: 中继 env 必须把 head 波特率钉在 921600（2026-11-02 执行时补入计划）**
+- [x] **Step 2b: 中继 env 必须把 head 波特率钉在 921600（2026-11-02 执行时补入计划）**
 
 `[env:esp32s3-relay]` 今天只有 `-DRX_TARGET_S3=1 -DRX_WIFI_RELAY=1`（`platformio.ini:40`）。Step 2 的 `#ifndef UART_LINK_BAUD / #define UART_LINK_BAUD 115200` 对它成立 ⇒ **中继会按 115200 装 head 的 UART，而 M2 的 C5 头是 `[env:esp32c5-head]` 的 921600**——两端都"在跑"，收到的全是乱码，`crc_errors` 一路涨，看起来像飞线质量问题。这是 M2 数据面的第一号坑，必须在计划里显式写死。
 
@@ -466,7 +466,7 @@ build_flags = -DRX_TARGET_S3=1 -DRX_WIFI_RELAY=1 -DUART_LINK_BAUD=921600
 
 并注明两端是一对：`esp32c5-head`(921600) ↔ `esp32s3-relay`(921600)，`esp32c5`(115200) ↔ Pi 的 ②a 路。波特率**不做**运行时可配——引脚之所以运行时可配是"芯片层给不出排针表"（§8.1），波特率不是未知量，spec §3 已经把它定成 M2 的固定搭配；再加一个 NVS 键只会多出一处"两端忘了配对齐"的机会。判据：`NET STATUS` 的 `head_baud` 必须是 `921600`（Task 14 的 L2 前置检查读它）。
 
-- [ ] **Step 3: 三个 env 都编译**
+- [x] **Step 3: 三个 env 都编译**
 
 Run:
 ```bash
@@ -476,13 +476,13 @@ cd repo/firmware && for e in esp32s3 esp32c5 esp32s3-relay; do \
 Expected: 三行都 `SUCCESS`。（**不并行跑 pio**——并发会死锁，逐条 `for`。）
 若报 `SOC_GPIO_PIN_COUNT` 未定义，在 `uart_link.c` 顶部加 `#include "soc/soc.h"` 再重跑；这是唯一允许的机械修正，别改判据。
 
-- [ ] **Step 4: 扫描 env 没多出 UART 符号**
+- [x] **Step 4: 扫描 env 没多出 UART 符号**
 
 Run: `cd repo/firmware && nm -C .pio/build/esp32s3/firmware.elf | grep -c "uart_link_open"`
 Expected: `0`（空桩支里 `uart_link_open` 是 no-op，被内联掉；若为 1 也不算回归，但要在提交信息里写明体积差）。
 更硬的判据留 Task 12 的体积账，别在这里放宽。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd repo && git add firmware/src/proto/uart_link.c firmware/src/proto/uart_link.h
@@ -498,7 +498,7 @@ git commit -m "feat(firmware): three-way uart_link - C5 sink, relay head link, s
 - Modify: `firmware/src/proto/commands.c:471-480`（PROTOCOL MONITOR 的 bins 钳位）与 `:580-582`（`SPEC` 命令的同第二处，见 Step 2b）
 - Modify: `firmware/platformio.ini`（`[env:esp32c5]` 之后插入新 env）
 
-- [ ] **Step 1: scanner.c 用线路速率**
+- [x] **Step 1: scanner.c 用线路速率**
 
 `firmware/src/scan/scanner.c:662-678` 里把预算常量换成函数：
 
@@ -531,7 +531,7 @@ static uint32_t uart_stream_cap(const scan_config_t *c, const plan_t *plan) {
 #include "uart_link.h"
 ```
 
-- [ ] **Step 2: commands.c 的 bins 钳位跟着换**
+- [x] **Step 2: commands.c 的 bins 钳位跟着换**
 
 `firmware/src/proto/commands.c:471-480` 的这段：
 
@@ -571,7 +571,7 @@ static uint32_t uart_stream_cap(const scan_config_t *c, const plan_t *plan) {
 
 并在 `commands.c` 顶部 include 段加 `#include "line_pace.h"`。
 
-- [ ] **Step 2b: 同一个钳位的第二处——`SPEC` 命令（2026-11-02 执行时补入计划）**
+- [x] **Step 2b: 同一个钳位的第二处——`SPEC` 命令（2026-11-02 执行时补入计划）**
 
 `commands.c:582` 是**另一个**写死的 512，注释还把它说成"link.c 的帧缓冲顶到 512-bin"，但 `link.c:43` 的 `FRAME_UART_MAX` 实为 `frame_header_t + frame_spectrum_t + 1024 + 4`——缓冲能吃下 **1024** bins，512 从来只是 @115200 的**节拍选择**。这一段不改，921600 的头就永远只能在 `PROTOCOL MONITOR` 那条路上拿到 992、操作员随后一句 `SPEC 4 992 MAX` 又被打回 512（且 `b <= 1024` 的入参校验本来就放行）。
 
@@ -596,7 +596,7 @@ static uint32_t uart_stream_cap(const scan_config_t *c, const plan_t *plan) {
 
 `pace_spec_bins` 与 `uart_link_*` 在 Step 1/2 已经 include 过，这里不新增头文件依赖。
 
-- [ ] **Step 3: 新 env**
+- [x] **Step 3: 新 env**
 
 `firmware/platformio.ini` 在 `[env:esp32c5]` 段之后插入：
 
@@ -623,7 +623,7 @@ Expected: 日志里板子是 `esp32-c5-devkitc-1`（`extends` 继承来的），
 
 **能用的三条**：①`pio run -e <env> -v` 首行 `Processing …(build_flags: …)` 会原样回显解析后的 env（`extends` 合并结果一并可见）；②`nm -u .pio/build/<env>/src/proto/uart_link.c.o | grep -cE "uart_driver_install|uart_param_config|gpio_pullup_en"`——C5/中继支是 `3`、扫描 env 空桩支是 `0`，这条同时证明 `-DRX_TARGET_C5` 真的进了编译器；③真机 `NET STATUS` 的 `head_baud`（Task 14 的前置检查）。波特率的**数值**只有 ③ 能定案，本轮如实标"未实测"。
 
-- [ ] **Step 4: 两个 C5 env 编过，且只有 head env 改了速率**
+- [x] **Step 4: 两个 C5 env 编过，且只有 head env 改了速率**
 
 Run:
 ```bash
@@ -638,7 +638,7 @@ cd repo/firmware/.pio/libdeps && cp -R esp32c5/Unity esp32c5-head/Unity && cp es
 ```
 `integrity.dat` 存的是依赖声明原文（`throwtheswitch/Unity@^2.6.1`），不是哈希，所以同依赖可直接复用。换机器/在 Pi 上重跑时这条要么联网装要么同样拷。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd repo && git add firmware/src/scan/scanner.c firmware/src/proto/commands.c firmware/platformio.ini
@@ -655,7 +655,7 @@ git commit -m "feat(firmware): pace from line rate; esp32c5-head env at 921600"
 - Modify: `firmware/src/CMakeLists.txt`（relay 那一支）
 - Modify: `firmware/src/main.c:96-115`
 
-- [ ] **Step 1: 头文件**
+- [x] **Step 1: 头文件**
 
 Create `firmware/src/net/relay_pipe.h`:
 
@@ -679,7 +679,7 @@ void relay_pipe_status(char *out, size_t cap);
 bool relay_pipe_send(const char *line);
 ```
 
-- [ ] **Step 2: 实现**
+- [x] **Step 2: 实现**
 
 Create `firmware/src/net/relay_pipe.c`:
 
@@ -755,7 +755,7 @@ bool relay_pipe_send(const char *line) {
 }
 ```
 
-- [ ] **Step 3: 进编译隔离门**
+- [x] **Step 3: 进编译隔离门**
 
 `firmware/src/CMakeLists.txt` 里那支 `if(DEFINED ENV{WIDSCAN_RELAY} OR WIDSCAN_RELAY)` 改成：
 
@@ -765,7 +765,7 @@ if(DEFINED ENV{WIDSCAN_RELAY} OR WIDSCAN_RELAY)
 endif()
 ```
 
-- [ ] **Step 4: main.c 先开 head 再起管道**
+- [x] **Step 4: main.c 先开 head 再起管道**
 
 `firmware/src/main.c:96-115` 的中继分支里，在 `commands_task_start();` **之前**插入（并把 include 段补上 `#include "net/relay_pipe.h"` 与 `#include "proto/uart_link.h"`）：
 
@@ -777,7 +777,7 @@ endif()
     relay_pipe_start();
 ```
 
-- [ ] **Step 5: 编过 + 扫描 env 没进 relay_pipe**
+- [x] **Step 5: 编过 + 扫描 env 没进 relay_pipe**
 
 Run:
 ```bash
@@ -794,7 +794,7 @@ Expected: `SUCCESS`，且 `0`（扫描 env 里不存在这个对象文件——�
 
 **本机踩到的第二条 penv 坑（与 Task 4 那条不同）**：`pio run -e esp32s3-relay` 报 `Error: Failed to install Python dependencies into penv`（penv_setup.py:664）——它先探 443 通不通，再 `uv pip install` 补 `python_deps` 表里缺的包。**PyPI 到不了就死在这一步，而这一步与编译无关**。正解是 `PLATFORMIO_OFFLINE=1 pio run …`（penv_setup.py:76 明确支持这个变量，打印 "No internet connection detected, Python dependency check will be skipped" 后照常构建，2026-11-02 在 esp32s3/esp32s3-relay 上各实测一次成功）。挂代理只在代理真开着时管用——本会话里它在 15:5x 之后就不监听了，同一条命令于是从 SUCCESS 翻成 FAILED，这是**唯一一处会随网络翻转的构建判据**，别把它当成"平台包坏了"去动 `~/.platformio`。
 
-- [ ] **Step 6: 提交**
+- [x] **Step 6: 提交**
 
 ```bash
 cd repo && git add firmware/src/net/relay_pipe.c firmware/src/net/relay_pipe.h firmware/src/CMakeLists.txt firmware/src/main.c
@@ -813,7 +813,7 @@ git commit -m "feat(firmware): relay byte pipe - sweep head UART to WS, counted,
 - Modify: `firmware/src/net/net_prefs.h`（struct 两字段）
 - Modify: `firmware/src/net/net_prefs.c`（`tx`/`rx` 两把键）
 
-- [ ] **Step 1: 两道闸都放行 HEAD**
+- [x] **Step 1: 两道闸都放行 HEAD**
 
 `handle()`（`commands.c:393-403`）在中继上对一条 ASCII 连过**两**道闸：先 `proto == PROTO_RH && !rh_allowed(line)`，再 `!relay_allowed(line)`。而 `proto` 的初值是 `PROTO_RH`（`commands.c:116`），所以只改 `relay_allowed` 的话 `HEAD` 会先被顶回 `ERR rh_mode`——必须两处一起放。
 
@@ -852,7 +852,7 @@ static bool rh_allowed(const char *line) {
 #endif
 ```
 
-- [ ] **Step 2: net_prefs 多两把键**
+- [x] **Step 2: net_prefs 多两把键**
 
 > **执行期（2026-11-02）：这一步已随 Task 5 落地**——`main.c` 的 `uart_link_open(prefs.tx, prefs.rx)` 要用到它，留在本任务里编不过。struct 字段、load/store/erase 三处都在 `71c2688`。本任务从 Step 3 开始。
 
@@ -887,7 +887,7 @@ static bool rh_allowed(const char *line) {
     static const char *keys[] = {"ssid", "pass", "url", "id", "on", "tx", "rx"};
 ```
 
-- [ ] **Step 3: `NET UART` 子命令**
+- [x] **Step 3: `NET UART` 子命令**
 
 `commands.c` 的 NET 分支里，在 `} else if (!strcmp(arg, "ON")) {` **之前**插入：
 
@@ -909,7 +909,7 @@ static bool rh_allowed(const char *line) {
 
 （`uart_link_open` 自己拒 19/20、26–32 和越界号，所以固件不会把控制台或 flash 线让出去。）
 
-- [ ] **Step 4: `HEAD` 转发与 NET STATUS 的 head 块**
+- [x] **Step 4: `HEAD` 转发与 NET STATUS 的 head 块**
 
 在 `handle()` 的分发链里、`commands.c:687` 那支 `} else if (is_net(line)) {` **之前**插入：
 
@@ -959,7 +959,7 @@ static bool rh_allowed(const char *line) {
 
 并把 include 段补 `#include "relay_pipe.h"`（与 `ws_link.h` 同一组、同一 `#if RX_WIFI_RELAY` 条件里）。
 
-- [ ] **Step 5: 中继不给 `cmd_uart` 派读任务**
+- [x] **Step 5: 中继不给 `cmd_uart` 派读任务**
 
 `commands.c:926-927` 的
 
@@ -983,7 +983,7 @@ static bool rh_allowed(const char *line) {
 #endif
 ```
 
-- [ ] **Step 6: 编过 + native 不退步**
+- [x] **Step 6: 编过 + native 不退步**
 
 Run:
 ```bash
@@ -993,7 +993,7 @@ cd repo/firmware && /Users/fcj/.local/bin/pio run -e esp32s3-relay 2>&1 | tail -
 ```
 Expected: 两个 `SUCCESS`，native `34` 条全绿。
 
-- [ ] **Step 7: 提交**
+- [x] **Step 7: 提交**
 
 ```bash
 cd repo && git add firmware/src/proto/commands.c firmware/src/net/net_prefs.c firmware/src/net/net_prefs.h
@@ -1009,7 +1009,7 @@ git commit -m "feat(firmware): HEAD forwarding and NET UART pins; no command rea
 - Modify: `firmware/src/net/ws_link.c:376-403`（`dial_task_fn`）
 - Modify: `firmware/src/net/ws_link.c:478-486`（`ws_link_status`）
 
-- [ ] **Step 1: 事件里留原因**
+- [x] **Step 1: 事件里留原因**
 
 `ws_link.c` 的状态变量区（`static` 那一片，靠近 `why`）加：
 
@@ -1045,7 +1045,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
 }
 ```
 
-- [ ] **Step 2: 等待也要有名**
+- [x] **Step 2: 等待也要有名**
 
 `dial_task_fn` 的 `if (!sta_up)` 分支（`ws_link.c:383-386`）改成：
 
@@ -1062,7 +1062,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
 
 （`ws_link_stop()` 里把 `why[0] = 0;` 加进 `sta_up = false;` 那一行之后，NET OFF 后重新 ON 才能重新命名一次；同函数 `commands.c` 的 `NET OFF` 已调 `ws_link_stop()`，不需额外改。）
 
-- [ ] **Step 3: 状态带上这两个数**
+- [x] **Step 3: 状态带上这两个数**
 
 `ws_link_status` 的 `snprintf` 改成：
 
@@ -1076,7 +1076,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
 
 `NET STATUS` 的 `up[200]` 缓冲在 Step 3 后至少需要 232 字节才不截尾——把 `commands.c` 那处 `char up[200], head[180];` 改成 `char up[256], head[180];`。**这条是真会咬人的**：`snprintf` 截了尾会让 JSON 少一个键而不是报错。
 
-- [ ] **Step 4: 编过并检查 `why` 的缓冲区还够**
+- [x] **Step 4: 编过并检查 `why` 的缓冲区还够**
 
 Run:
 ```bash
@@ -1089,7 +1089,7 @@ Expected: `why` 是 `static char why[24]`（或更大），`SUCCESS`。若 `why`
 **一处偏离原文**：`sta_reason`/`sta_downs` 的赋值套在 `if (want_up)` 里。`ws_link_stop()` 先清 `want_up` 再 `esp_wifi_disconnect()`，而这条事件正是那次断开带回来的——不加这道判断，操作员每次 NET OFF 都会看到一个"失败原因码"和一个涨了的计数，而那恰恰是他刚要求的事。真掉线（`want_up` 仍为 true）照常计数，`why` 那条不受影响。
 **构建判据**：本任务的 `SUCCESS` 是在 `PLATFORMIO_OFFLINE=1` 下取得的（见 Task 5 那条坑）；判据除 `SUCCESS` 外补了镜像字符串检查——`sta_reason` ×3、`no_ip` ×1，证明改的是进镜像的那份而不是被 `#if` 挡掉的那份。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd repo && git add firmware/src/net/ws_link.c firmware/src/proto/commands.c
@@ -1103,7 +1103,7 @@ git commit -m "fix(relay): record the STA disconnect reason - why:\"\" hid a dea
 **Files:**
 - Modify: `rftrack/backend/tests/test_frame_parity.py`（新增一条参数化用例，不动既有用例）
 
-- [ ] **Step 1: 写测试**
+- [x] **Step 1: 写测试**
 
 追加到 `rftrack/backend/tests/test_frame_parity.py` 末尾（该文件已有 `STREAMS`、`STREAM_NAMES`、`FrameStream` 三个现成的名字，本用例只用它们，不新造夹具）：
 
@@ -1142,14 +1142,14 @@ def test_rechunking_a_stream_changes_nothing(name, rechunk):
     )
 ```
 
-- [ ] **Step 2: 跑到通过**
+- [x] **Step 2: 跑到通过**
 
 Run: `cd repo/rftrack/backend && python -m pytest tests/test_frame_parity.py -k rechunk -q --junit-xml=/tmp/w58-probe/chunk.xml`
 Expected: `24` 条（8 条 golden 流 × 3 种切块）全 PASS。
 **这条性质今天已经实测成立**：`/tmp/w58-probe/chunk_probe.py`（2026-11-02，本计划写就前）对全部 8 条流按 1/7/1024 重切，逐项与 `want` 相同、无一行 MISMATCH。所以它不是"新缺陷"，是给 Task 5 的前提上锁。
 若实现完反而 FAIL，那说明 `FrameStream` 被顺手改过——**停下来上报**，不要绕过去改测试的期望值。
 
-- [ ] **Step 3: 提交**
+- [x] **Step 3: 提交**
 
 ```bash
 cd repo && git add rftrack/backend/tests/test_frame_parity.py
@@ -1171,7 +1171,7 @@ git commit -m "test(rftrack): stream parser must be invariant to relay chunk bou
 3. **多一条"先有人在读才放字节"的闸**。桥的 `attachNode()` 只把节点的字节转发给**当前挂着的那一页**（`node.page`），没人挂时直接丢弃。若照原文连上就发，开头几 KB 会丢在帧中间，随后 `FrameStream` 必然 resync——而判据要的正是 `resync_bytes = 0`。脚本现在先轮询桥的 `/api/endpoints`，等 `node:<id>` 的 `busy` 变 true 再发第一块；等不到就带原因退出（实测这一条真挡了一次：90 s 超时报 `no page attached to node:fake-head`）。
 4. **Step 2 少了一步：capture 不是拨上就有字节**。后端拨号循环只把 `node:` 端点**登记进库**（`/api/nodes` 里 `status: active`），不打开管道；`capture` 是 `BridgeHub` 的只读观察者，**必须有客户端持有 `/ws/bridge/{ep}?gateway=N`** 才会有上游、才有字节（与演示环境 `hold_node_pipe.py` 同一条已知事实）。本轮用 `/tmp/w58-probe/hold_l1.py <ep> <gw> <port>`（`/tmp/rftrack-demo/hold_any.py` 改端口参数版）。少了这一步时 health 是 `frames=0 / endpoints=0`，而 `dialer` 一切正常——这个组合就是"没 holder"的指纹。
 
-- [ ] **Step 1: 写脚本**
+- [x] **Step 1: 写脚本**
 
 Create `rftrack/tools/relay_chunk_replay.mjs`:
 
@@ -1228,7 +1228,7 @@ sock.close();
 console.log(JSON.stringify({ sent, source_bytes: all.length, chunk, seconds }));
 ```
 
-- [ ] **Step 2: 起桥与后端，跑一次，取 health**
+- [x] **Step 2: 起桥与后端，跑一次，取 health**
 
 夹具就位（2026-11-02 实测 `/tmp/w58-probe/dual-C5.bin` 在，2,215,611 B，是 ①USB 真机录制的那一段）：
 
@@ -1266,7 +1266,7 @@ cd repo && node rftrack/tools/relay_chunk_replay.mjs --file /tmp/w58-probe/dual-
 
 拨号循环是按 TTL 重取桥的端点表的，所以脚本跑完**先别关桥**：`node:fake-head` 要在桥上活着，后端才拨得到。上面脚本 30 s 后自己关 socket——把 `--seconds 120` 用作判据窗口，health 在窗口里读。
 
-- [ ] **Step 3: 判据**
+- [x] **Step 3: 判据**
 
 Run: `curl -s --noproxy '*' http://127.0.0.1:9020/api/health | python3 -m json.tool | sed -n '/capture/,/}/p'`
 Expected:
@@ -1289,11 +1289,11 @@ Expected:
 `skipped_frames` 的两项不是错：`_frame()` 把"解得出但没有 `channels`"的帧按类型名数出来（spectrum / telemetry 本来就不进信道格子），`capture.py:619-624`。
 另加一条离线对照（不落仓库，一次性脚本）：同一份字节用 `FrameStream` 分别**整块喂 / 1024 一块 / 7 字节一块**，三种切法都是 `frames=17464 text=1 crc=0 resync=0 bytes=2215611`，与在线那组逐字段相同——管道切块与解析结果无关这件事，在 2.1 MB 真字节上也成立，不只是 Task 8 那 8 条 golden 流上成立。
 
-- [ ] **Step 4: 门槛口径写清楚**
+- [x] **Step 4: 门槛口径写清楚**
 
 本条只到 **仅完成模拟测试**：代码路径证据，不是无线电证据。收尾报告里不许升档。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd repo && git add rftrack/tools/relay_chunk_replay.mjs
@@ -1315,7 +1315,7 @@ git commit -m "test(relay): L1 fake relay replay of a real C5 capture at pipe ch
 2. `status()` 是同步端点，**跑在线程池里**，而 `_endpoints` 在事件循环上一直变（`capture.py:1107-1113` 把这条写成显式纪律）。所以明细必须是循环侧**整份换出的元组**，照 `_refresh_queues()`（`capture.py:467-473`，调用点 `:462`/`:497`/`:562`）那一套来；直接在线程里迭代 `_endpoints` 会偶发 `dictionary changed size during iteration`，而发生的时刻正是板子最多、有人在盯健康看的时刻。
 3. 会话结束（`_forget_endpoint:473-483`）也要换快照，否则"拔掉的那条"会以 0 帧的形态留在明细里——那是"在列表但不说话"的假死，spec §6 明令禁止的形态。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 追加到 `rftrack/backend/tests/test_capture.py`（复用该文件既有的 `chain` / `make_pipeline` / `run` 三个夹具与 `METRICS`/`LOG` 字节常量，不新造）：
 
@@ -1355,12 +1355,12 @@ def test_endpoint_detail_rides_through_health(client, chain):
     assert isinstance(body["capture"]["endpoints"], int), "旧键的形态是契约，不许顺手改"
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd repo/rftrack/backend && python -m pytest tests/test_capture.py -k endpoint_detail -q --junit-xml=/tmp/w58-probe/eps.xml`
 Expected: 两条 FAIL，`KeyError: 'endpoint_stats'`。`Link` 本文件 `:42` 已 import、`:548` 那条用例就是用它收会话的，不用新造公开方法。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `_Endpoint`（`capture.py:139-161`）末尾加两把计数：
 
@@ -1414,7 +1414,7 @@ Expected: 两条 FAIL，`KeyError: 'endpoint_stats'`。`Link` 本文件 `:42` �
 
 收会话的公开路径已经有了：`untap(link)`（`capture.py:421`）内部就是 `_forget_endpoint`，所以 Step 1 用 `untap` 触发的正是上面 `_forget_endpoint` 那行新加的发布——不需要、也不许新发明一个 `forget()`。
 
-- [ ] **Step 4: 跑到通过并跑全量**
+- [x] **Step 4: 跑到通过并跑全量**
 
 Run: `cd repo/rftrack/backend && python -m pytest -q --junit-xml=/tmp/w58-probe/m2-pytest.xml`
 Expected: 全绿、1 skipped（唯一 skip 仍是 `test_settings_isolation.py:258`），总数 = 587 + 2。
@@ -1426,12 +1426,14 @@ Expected: 全绿、1 skipped（唯一 skip 仍是 `test_settings_isolation.py:25
 1. `_refresh_endpoints()` 只挂在 **`_drain()` 与 `_forget_endpoint()`** 两处，没有跟着 `_offer()`/`_queue_for()` 的 `_refresh_queues()` 一起挂。`_endpoints` 只在这两处变（新建在 `_process` 里、删除在 `_forget_endpoint` 里），而 `_process` 只在 `_drain` 里被调——另两处挂上去是热路径上的空转，换不来任何新鲜度。两处都做了变异自证：删掉任一处，`test_endpoint_detail_names_which_link_a_frame_came_from` 都会 FAIL（不是靠断言"看起来有键"）。
 2. 快照里 `crc_errors`/`resync_bytes` 取的是 `endpoint.stream.*` 的**生命周期累计**，而不是折进全局后 `_Endpoint.crc_seen` 那一截。明细回答的是"**这条流**一共坏了多少"，与全局用增量折算是两件事；两者混用会让一条断过的流在明细里显示 0。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd repo && git add rftrack/backend
 git commit -m "feat(rftrack): per-endpoint capture detail in /api/health"
 ```
+
+**执行期实测（2026-11-02）**：`tests=618 failures=0 errors=0 skipped=1`（614 + 本任务 4）。红相取证有个**选择器坑**要记：`-k "put or declare or aggregator"` 只选中 3 条——`test_a_declaration_survives_the_next_endpoint_sweep` 里的 `declaration` **不含子串 `declare`**，那条单独跑一次确认也是红的（`KeyError: 'max_bins'`，因为 PUT 还返回 405）。实现与计划一致，响应就是 `GET` 的那一套键；`capabilities: [1,2]` 由 Pydantic 直接 422；聚合实例 405 + `detail.reason=aggregator_read_only` 来自 `require_writable_session`。提交 `f3aa018`。
 
 ---
 
@@ -1448,7 +1450,7 @@ git commit -m "feat(rftrack): per-endpoint capture detail in /api/health"
 2. `reconcile()`（`ingest.py:85-160`）**从不写** `capabilities_json` / `fw_version` / `protocol_version`：它只动 `display_name/transport_kind/stops_rh/status/last_seen`。⇒ 新的 PUT 是这三列的唯一写入口，且不会被下一轮拨号对账抹掉。这条正是"声明不会被端点表冲掉"的证据，写成一条测试。
 3. 汇聚实例的写侧口径是 `require_writable_session`（`deps.py:44`），405 的 `detail` 形状在 `test_settings_isolation.py:410-412` 有整段现成断言可抄。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 追加到 `rftrack/backend/tests/test_nodes_read.py`：
 
@@ -1549,12 +1551,12 @@ def test_the_aggregator_cannot_declare(chain, client, db_path):
     assert row.json()["detail"]["reason"] == "aggregator_read_only"
 ```
 
-- [ ] **Step 2: 跑到失败**
+- [x] **Step 2: 跑到失败**
 
 Run: `cd repo/rftrack/backend && python -m pytest tests/test_nodes_read.py -k "put or declare or aggregator" -q --junit-xml=/tmp/w58-probe/declare.xml`
 Expected: 前四条 FAIL（405/404/422 都不是"路由正常返回 200"）——`Method Not Allowed` 就是"路由还不存在"的证据。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `schemas.py` 在 `NodeOut` 之后加一个**入参**模型（不出参，避免与 `NodeOut` 混用）：
 
@@ -1599,12 +1601,12 @@ def declare_node(
 补 `import json`（该文件现在没有），并把 `flush_or_conflict` 加进 `..services.hierarchy` 那行。
 `display_name/transport` **不在入参里**：它们是 `reconcile()` 的事实，人改不了，改了也会被下一轮盖回去。
 
-- [ ] **Step 4: 跑到通过并跑全量**
+- [x] **Step 4: 跑到通过并跑全量**
 
 Run: `cd repo/rftrack/backend && python -m pytest -q --junit-xml=/tmp/w58-probe/m2-pytest2.xml`
 Expected: 全绿（数 = 587 + Task 10 的 2 条 + 本任务 4 条），1 skipped 不变。
 
-- [ ] **Step 5: 提交**
+- [x] **Step 5: 提交**
 
 ```bash
 cd repo && git add rftrack/backend
@@ -1618,32 +1620,32 @@ git commit -m "feat(rftrack): operator-declared node capabilities (PUT /api/node
 **Files:**
 - 无代码改动（除非门槛不过）
 
-- [ ] **Step 1: 后端门槛**
+- [x] **Step 1: 后端门槛**
 
 Run: `cd repo/rftrack/backend && python -m pytest -q --junit-xml=/tmp/w58-probe/gate-m2-backend.xml`
 Expected: 全绿、1 skipped；**不许用 skip 换绿**（`pytest -rs` 复核那条 skip 的 reason 还在）。
 
-- [ ] **Step 2: 工作台门槛**
+- [x] **Step 2: 工作台门槛**
 
 Run: `cd repo/rftrack/frontend/workbench && node --test test/*.test.mjs 2>&1 | tail -8`
 Expected: `214` pass / 0 fail。
 
-- [ ] **Step 3: 桥与 web 门槛**
+- [x] **Step 3: 桥与 web 门槛**
 
 Run: `cd repo/web && npm test 2>&1 | tail -6`
 Expected: `56` pass / 0 fail（`web/serve.mjs` 本计划 0 改动，这条是防"顺手改了桥"）。
 
-- [ ] **Step 4: 浏览器冒烟**
+- [x] **Step 4: 浏览器冒烟**
 
 Run: `cd repo && node rftrack/frontend/e2e/workbench.mjs 2>&1 | tail -6`
 Expected: `65/65`。
 
-- [ ] **Step 5: native 门槛**
+- [x] **Step 5: native 门槛**
 
 Run: `cd repo/firmware && /Users/fcj/.local/bin/pio test -e native 2>&1 | tail -6`
 Expected: `34` 条全绿。
 
-- [ ] **Step 6: 四个 env 全编 + 体积账**
+- [x] **Step 6: 四个 env 全编 + 体积账**
 
 Run:
 ```bash
@@ -1658,14 +1660,32 @@ Expected（基线：`esp32s3` 565,024、`esp32c5` 687,680、relay 695,344）：
 - relay：`relay_pipe.c` + `NET UART`/`HEAD` + `sta_reason` 三项，逐项报数。
 不设"必须为 0"，但每一字节要有名字。
 
-- [ ] **Step 7: 扫描 env 里没有 net/relay_pipe 对象**
+- [x] **Step 7: 扫描 env 里没有 net/relay_pipe 对象**
 
 Run: `cd repo/firmware && for d in esp32s3 esp32c5 esp32c5-head; do printf "%-14s %s\n" "$d" "$(find .pio/build/$d -name '*relay_pipe*' -o -name '*ws_link*' | wc -l)"; done`
 Expected: 三行都 `0`。
 
-- [ ] **Step 8: L6 真机回退——本计划内标未执行**
+- [x] **Step 8: L6 真机回退——本计划内标未执行**
 
 `[env:esp32s3]` 重烧 + MONITOR 60 s ×3 + `CONFIG RESET` 后无 Wi-Fi 残留态这条**需要板子**，与用户飞线窗口一起做。**在报告里如实写「真机回归未执行」，此时 M2 只能标到「已通过软件测试」**。
+
+**执行期实测（2026-11-02）**：
+
+| 门槛 | 实测 |
+|---|---|
+| 后端 | `618 passed / 1 skipped`（skip reason 原样，未用 skip 换绿） |
+| 工作台 | `214 pass / 0 fail`（227 ms） |
+| `web` | `56 passed / 10 files`（337 ms） |
+| 浏览器冒烟 | `65 / 65，0 失败，51.4 s` |
+| native | `34 / 34`（`test_ws` / `test_dsp` / `test_pace`） |
+| 扫描 env 对象隔离 | `relay_pipe*`/`ws_link*` 在 esp32s3、esp32c5、esp32c5-head 命中 **0/0/0** |
+
+**四 env 体积账**：基线不是拿今天的产物反推，而是在**干净 worktree `02afed9`**（M2 前）重编三个 env 得到的真值：`esp32s3` 565,024、`esp32c5` 687,680、`esp32s3-relay` 695,344（与计划基线逐字节一致，说明基线本身可信）。当前：`esp32s3` **565,136**、`esp32c5` **687,792**、`esp32c5-head` **687,792**、`esp32s3-relay` **709,456**。
+
+- `esp32s3` **+112**：计划原写"应为 0"是**错的**——`line_pace.h` 不只 C5 用，`commands.c`/`scanner.c` 在所有 env 都编译。可命名部分 = `handle` +64（`pace_spec_bins` 两处内联，`commands.c:487/595`）+ `scanner_task` +28（`pace_budget`，`scanner.c:680`）+ `uart_link_line_rate`/`uart_link_tx_ring_bytes` 两个只读常量 +14（各 7 B）；`.flash.text` +108，余 **+4 B 是镜像打包**。
+- `esp32c5` **+112**：`handle` +80、`scanner_task` +26、两常量 +14 = `.flash.text` **+120**（ISA 不同，同两处内联展开大小不同）；bin 比节小 8 B，同为打包。
+- `esp32c5-head` **687,792**：与 `esp32c5` 同尺寸——两个 env 只差编译期波特率常量，值宽度相同，不改代码体积。这条同时证明 921600 这份不是另写了一套。
+- `esp32s3-relay` **+14,112**：分配节共 **+14,120**（`.flash.text` +12,196 / `.flash.rodata` +1,120 / `.iram0.text` +612 / `.dram0.data` +192），与 bin 差 8 B 是打包。按对象/符号归因：**UART 驱动首次进中继链接 +12,194**（`uart.c` 7,656 + gpio/hal/ringbuf/clk/freertos 支撑 2,800 + 其它 IDF 338 + 对象内字面量/对齐 983）、`relay_pipe.c` **+552**、`commands.c` **+521**（`HEAD` 转发 + `NET UART` 的代码与帮助文本）、`uart_link.c` **+426**（head 链路）、`ws_link.c` **+180**（`sta_reason`）、`net_prefs.c` **+150**（`uart_tx/rx` 两条 NVS）、`main.c` **+61**、`scanner.c` **+36**（`pace_budget`）。另有 `relay_pipe` 的 **1,024 B `chunk` 缓冲只落 `.bss`**（RAM，不进 bin）。**一句话**：中继这次涨的不是"管道协议重了"，而是**第一次把 UART 驱动整个拉进链接**（约 12.2 KB），管道本身与命令面合计 ≈1.5 KB。
 
 ---
 
@@ -1676,11 +1696,11 @@ Expected: 三行都 `0`。
 - Modify: `docs/rf-track/RF_Track_落地实施方案与计划.md`（§7 的 M2 行实况）
 - Create: 本计划的收尾节（勾选项 + 数字）
 
-- [ ] **Step 1: 勾执行痕迹**
+- [x] **Step 1: 勾执行痕迹**
 
 本文件每个已做完的 Step 把 `- [ ]` 改成 `- [x]`，并在文末「收尾实况」里记：三门槛/native 数字、四 env 体积账、L1 的 `{sent, frames, crc_errors, resync_bytes}`、D1–D4 的落地位置。真机四道门槛（L2/L3/L4/L5）逐条写「未执行：等 C5↔S3 飞线」。
 
-- [ ] **Step 2: 脱敏扫描（三条执行期规则，M1 已定）**
+- [x] **Step 2: 脱敏扫描（三条执行期规则，M1 已定）**
 
 ```bash
 cd repo && git add -A && git diff --cached --name-only
@@ -1694,7 +1714,7 @@ python3 /tmp/w58-probe/scrub_scan.py "fork/fw-wifi-relay..HEAD" 2>&1 | tail -12
 
 Expected: `CLEAN`（0 命中）。有新写的样例地址就当场改字面量——**加补救提交没用**，未推送的 tip 用 `--amend` 重写后复跑门槛再重扫。
 
-- [ ] **Step 3: 提交文档**
+- [x] **Step 3: 提交文档**
 
 ```bash
 cd repo && git add docs && git commit -m "docs(relay): M2 execution record - gates, size ledger, real-hardware gates deferred"
@@ -1725,8 +1745,9 @@ L5 用真录制时注意既有口径：`services/replay.py` 现在按 `SOURCE="m
 
 ## 3. 收尾实况（执行时填）
 
-- 三门槛 / native：待填
-- 四 env 体积账：待填
-- L1 假中继：待填（`{sent, frames, crc_errors, resync_bytes}`）
-- 真机四道门槛：**未执行**（等用户飞线窗口）
-- 推送：待用户授权
+- **三门槛 / native（2026-11-02）**：后端 **618 passed / 1 skipped**、工作台 **214/214**、浏览器冒烟 **65/65（51.4 s）**、`web` **56/56**、`pio test -e native` **34/34**。唯一 skip 仍是 `test_settings_isolation.py::test_deleting_a_tile_clears_its_subscriptions`，reason 原样。
+- **四 env 体积账**：`esp32s3` 565,024→**565,136（+112）**、`esp32c5` 687,680→**687,792（+112）**、`esp32c5-head` **687,792**（新）、`esp32s3-relay` 695,344→**709,456（+14,112）**。基线在 `02afed9` 的干净 worktree 重编取得；归因见 Task 12 的执行期实测表——两扫描 env 的 +112 全由 `line_pace.h` 内联（`handle`/`scanner_task`）与 `uart_link` 两个 7 B 常量解释；relay 的 14 KB 里 **12,194 B 是 UART 驱动首次进链接**，管道与命令面合计约 1.5 KB，另 1,024 B `chunk` 只占 RAM。
+- **L1 假中继**：`{sent: 2,215,611, chunks: 2,164, frames: 17,464, crc_errors: 0, resync_bytes: 0, text_lines: 1, dropped: 0}`；`skipped={spectrum: 2,871, telemetry: 238}` 均为既有类型。离线整块/1024/7 三种切法结果逐字段相同。
+- **D1–D4 落地位置**：D1 `HEAD` 转发与裸命令仍由中继应答 → `firmware/src/proto/commands.c`（`9c6e42d`）；D2 `[env:esp32c5-head]` 921600、`[env:esp32c5]` 115200 不动 → `firmware/platformio.ini`（`ff2d5a2`）；D3 `NET UART <tx> <rx>` 运行时可配 + NVS → `commands.c`/`net_prefs.c`（`9c6e42d`）；D4 `sta_reason`/`sta_downs`/`why` → `ws_link.c`（`27fcc70`）。平台侧补 `capture.endpoint_stats`（`c6c46a7`）与 `PUT /api/nodes/{id}`（`f3aa018`）。
+- **真机四道门槛**：**未执行**——L2 飞线静置、L3 断网重连、L4 命令回环、L5 帧对拍逐条等 C5↔S3 飞线；L1.5（`sta_reason` 可见性）同样未在真机上验。L6 真机回退也**未执行**。⇒ M2 当前只能标「**已通过软件测试**」。
+- **推送**：未执行（等用户明确要求；只推 `fork`，`origin` 永不推）。
