@@ -1164,6 +1164,13 @@ git commit -m "test(rftrack): stream parser must be invariant to relay chunk bou
 - Create: `rftrack/tools/relay_chunk_replay.mjs`
 - Test: 后端 health 快照（脚本内断言，不落库）
 
+**执行期更正（2026-11-02，四处）**——落地脚本与上面原文不同，差异全部是"照着原文跑不通"或"跑通了也不证明判据"：
+
+1. **不用 `ws` 包，改用 Node 内置的 `WebSocket`**。原文 `await import("ws")` 在 `rftrack/tools/` 下解析不到——`ws` 只装在 `web/node_modules`，从 tools 往上找不到它，脚本第一帧都没发就崩。Node 22 自带 WebSocket 客户端，零依赖（与 `export_golden_frames.mjs` 不引构建依赖同一条取舍）。
+2. **节拍公式重写**。原文 `step = round((RATE * 0.05) / 1000 / chunk)` 多除了一次 1000（`RATE` 已是 B/s，`*0.05` 就是 50 ms 的字节数），得 0 → `max(1,·)` → 每 50 ms 一块 = 20.5 KB/s，而注释写着"按实测 37.0 KB/s"。现按**已耗时算预算**（`budget = elapsed * RATE`，向下取整到整块），tick 迟到会自己补回来，收尾把实测速率打印出来：本轮实测 **36.8 KB/s**（2,215,611 B / 58.8 s / 2164 块），与目标 37.0 对得上——是打印出来的，不是假设的。
+3. **多一条"先有人在读才放字节"的闸**。桥的 `attachNode()` 只把节点的字节转发给**当前挂着的那一页**（`node.page`），没人挂时直接丢弃。若照原文连上就发，开头几 KB 会丢在帧中间，随后 `FrameStream` 必然 resync——而判据要的正是 `resync_bytes = 0`。脚本现在先轮询桥的 `/api/endpoints`，等 `node:<id>` 的 `busy` 变 true 再发第一块；等不到就带原因退出（实测这一条真挡了一次：90 s 超时报 `no page attached to node:fake-head`）。
+4. **Step 2 少了一步：capture 不是拨上就有字节**。后端拨号循环只把 `node:` 端点**登记进库**（`/api/nodes` 里 `status: active`），不打开管道；`capture` 是 `BridgeHub` 的只读观察者，**必须有客户端持有 `/ws/bridge/{ep}?gateway=N`** 才会有上游、才有字节（与演示环境 `hold_node_pipe.py` 同一条已知事实）。本轮用 `/tmp/w58-probe/hold_l1.py <ep> <gw> <port>`（`/tmp/rftrack-demo/hold_any.py` 改端口参数版）。少了这一步时 health 是 `frames=0 / endpoints=0`，而 `dialer` 一切正常——这个组合就是"没 holder"的指纹。
+
 - [ ] **Step 1: 写脚本**
 
 Create `rftrack/tools/relay_chunk_replay.mjs`:
@@ -1267,6 +1274,20 @@ Expected:
 - `crc_errors` = 0、`resync_bytes` = 0、`skipped_frames` 无新增类型
 - Task 10 做完按端点快照后，这组数字要能在 `capture.endpoint_stats[]` 里归到 `node:fake-head` 那一条上（Task 10 之前只有汇总，归因缺口是已申报的）。
 - 读完把两个后台进程收掉：`pkill -f "serve.mjs --port 8011"; pkill -f "RFTRACK_PORT=9020"` 不成就用 `lsof -ti tcp:8011 -i tcp:9020 | xargs kill`——**只杀这两个端口上的**，演示环境的 8010/9000 不许碰。
+
+**执行期实测（2026-11-02）**：2,215,611 B 真 C5 录制、按 `PIPE_CHUNK=1024` 切、36.8 KB/s 放完，全程 `busy=true` 的 `node:fake-head` 一条流：
+
+| 判据 | 实测 | 判定 |
+| --- | --- | --- |
+| `capture.frames` | 17,464（跑前 0） | > 0 ✅ |
+| `crc_errors` | **0** | ✅ |
+| `resync_bytes` | **0** | ✅ |
+| `skipped_frames` | `{spectrum: 2871, telemetry: 238}` | 全是 `FRAME_NAMES` 里已有的名字，无 `unknown_*` ✅ |
+| 队列 | `received=2164 dropped=0 peak=7 limit=256` | 2164 = 发送块数，一块不丢 ✅ |
+| `text_lines` | 1 | 录制开头那一行 `INFO` ✅ |
+
+`skipped_frames` 的两项不是错：`_frame()` 把"解得出但没有 `channels`"的帧按类型名数出来（spectrum / telemetry 本来就不进信道格子），`capture.py:619-624`。
+另加一条离线对照（不落仓库，一次性脚本）：同一份字节用 `FrameStream` 分别**整块喂 / 1024 一块 / 7 字节一块**，三种切法都是 `frames=17464 text=1 crc=0 resync=0 bytes=2215611`，与在线那组逐字段相同——管道切块与解析结果无关这件事，在 2.1 MB 真字节上也成立，不只是 Task 8 那 8 条 golden 流上成立。
 
 - [ ] **Step 4: 门槛口径写清楚**
 
