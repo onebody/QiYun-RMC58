@@ -137,7 +137,7 @@ M1 是 M2 的严格子集，且能在 C5 缺席时独立取得真机证据——
 
 ## 8. 开放项（实现前要有答案）
 
-1. **S3 是哪块板 / 排针可用情况**：决定我把它接到 C5 的哪对 GPIO，也决定接线表怎么写。目前一手证据只有 esptool 报的 `ESP32-S3 (QFN56) revision v0.2` + 4 MB flash。
+1. **S3 是哪块板 / 排针可用情况**：**芯片层给不出答案**——2026-11-02 实测 esptool 只报 `ESP32-S3 (QFN56) rev v0.2 / 4 MB flash / USB-Serial/JTAG`（MAC 留在 /tmp 取证里，不进仓库），而 `platformio.ini:20` 那句 "Micro" board 出自上游 `17e48d6`（Bryan Mayland, 2026-10-10），不是本机取证。已确认的约束只有：GPIO19/20 = native USB（我们的控制台，不可占），GPIO26–32 = SPI flash/PSRAM，GPIO43/44 = U0TXD/U0RXD 且中继镜像的控制台是 `CONFIG_ESP_CONSOLE_NONE=y` + `CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y`（实测 `sdkconfig.esp32s3-relay:1657/1661`，不占 43/44）。⇒ 裁定：引脚做成运行时可配（M2 计划的 `NET UART <tx> <rx>`，NVS 持久，默认 43/44），第一次接线时用「哪一对脚能收到 C5 的字节」当场判出来，而不是猜一版烧一版。
 2. **AP 凭据给法**：建议在板子自己的串口上敲 `NET SSID=` / `NET PASS=`，经 NVS 保存，不进聊天、不进仓库、不进测试夹具。
 3. 能力声明：确认按 §1 末的口径（M1/M2 如实 `unsupported`，M2 收尾补 `PUT /api/nodes/{id}`）。
-4. C5 是否要重新烧一版含 921600 的固件：现在 C5 报的是 `Web-v0.10` 版本串，需确认它跑的到底是不是带 F1 UART 链路的那份（`edb400d6` 那条），别默认。
+4. **C5 烧的是哪份固件**：已结案。2026-11-02 的 `INFO` 报 `Web-v0.10|2026-10-29T00:07:24+08:00|109,edb400d6`——`git describe` 落在 `Web-v0.10`（打在 `7bec675`，即 F1 UART 链路那版）且**无 `-N-g` 后缀**，说明就建在该提交上；末段 `109,edb400d6` 是 `radio_phy_version()`（`commands.c:419-420`），不是提交号。⇒ M2 需要给 C5 重烧一份 `[env:esp32c5-head]`（921600）；115200 那份继续是 Pi 的 ②a 路，两条不共用一个二进制。
