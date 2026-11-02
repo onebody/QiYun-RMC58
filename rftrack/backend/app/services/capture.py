@@ -159,6 +159,10 @@ class _Endpoint:
     #: `silent` 说的是"**已经落过** node_offline"，不是"此刻安静"：断流与恢复都按跃迁落行，
     #: 一轮里安静三次也只写一行——事件表记的是发生过什么，不是我们轮询了几次。
     silent: bool = False
+    #: 按端点的帧/跳过账。全局总数回答"这场一共多少帧"，这一对回答"**是哪条流**给的"——
+    #: 2026-11-01 的 99,465 个 CRC 只能整场重接，就是因为当时只有全局。
+    frames_seen: int = 0
+    skipped_seen: int = 0
 
 
 @dataclass(frozen=True)
@@ -295,8 +299,9 @@ class CapturePipeline:
         self._queues: dict[int, GatewayQueue] = {}
         self._refs: dict[tuple[int, str], NodeRef] = {}
         self._claimed: set[int] = set()
-        #: 两个"发布出去就只读"的快照，见 `_refresh_queues()` 与 `_count_skipped()`。
+        #: 三个"发布出去就只读"的快照，见 `_refresh_queues()`、`_refresh_endpoints()` 与 `_count_skipped()`。
         self._queue_stats: tuple[dict[str, Any], ...] = ()
+        self._endpoint_stats: tuple[dict[str, Any], ...] = ()
         self._skipped_snapshot: dict[str, int] = {}
         self._work = asyncio.Event()
         self._stopping: asyncio.Event | None = None
@@ -470,6 +475,25 @@ class CapturePipeline:
         """
         self._queue_stats = tuple(queue.stats() for queue in self._queues.values())
 
+    def _refresh_endpoints(self) -> None:
+        """按端点明细发布成**新**元组。规则与 `_refresh_queues()` 一字不差：
+        `/api/health` 在另一个线程里迭代它，而这边随时可能新增或拔掉一条端点。"""
+        self._endpoint_stats = tuple(
+            {
+                "endpoint": endpoint.ep,
+                "gateway_id": endpoint.gateway_id,
+                "source": endpoint.source,
+                "frames": endpoint.frames_seen,
+                "skipped": endpoint.skipped_seen,
+                "crc_errors": endpoint.stream.crc_errors,
+                "resync_bytes": endpoint.stream.resync_bytes,
+                "last_frame_mono": endpoint.last_frame_mono,
+            }
+            for endpoint in sorted(
+                self._endpoints.values(), key=lambda e: (e.gateway_id, e.ep)
+            )
+        )
+
     def _forget_endpoint(self, key: tuple[int, str]) -> None:
         endpoint = self._endpoints.pop(key, None)
         if endpoint is None:
@@ -481,6 +505,8 @@ class CapturePipeline:
         # 只折还没算过的那一截（理由见 `_Endpoint.crc_seen`）。
         self.crc_errors += endpoint.stream.crc_errors - endpoint.crc_seen
         self.resync_bytes += endpoint.stream.resync_bytes - endpoint.resync_seen
+        # 拔掉的那条要**当场**从明细里消失：留在列表里又不说话，就是 spec §6 禁止的假死。
+        self._refresh_endpoints()
 
     def _queue_for(self, gateway_id: int) -> GatewayQueue | None:
         """每接入机一条队列，条数受 `max_gateways` 这道闸管。
@@ -560,6 +586,9 @@ class CapturePipeline:
             self._process(item)
             moved += 1
         self._refresh_queues()
+        # 帧与跳过的账是在 `_process` 里涨的，端点也是在那儿新建的：这一拍搬过字节，
+        # 明细就必须重发一次，否则 health 读到的是上一拍的帧数。
+        self._refresh_endpoints()
         return moved
 
     def drain_all(self) -> int:
@@ -618,8 +647,10 @@ class CapturePipeline:
 
     def _frame(self, endpoint: _Endpoint, piece: frame_parser.StreamItem) -> None:
         self.frames += 1
+        endpoint.frames_seen += 1
         decoded = frame_parser.decode(piece.type, piece.payload)
         if decoded is None or "channels" not in decoded:
+            endpoint.skipped_seen += 1
             self._count_skipped(FRAME_NAMES.get(piece.type, f"unknown_{piece.type}"))
             return
         moment = utcnow()
@@ -1108,7 +1139,7 @@ class CapturePipeline:
 
         **这段是在另一个线程里跑的**（`/api/health` 是同步端点，FastAPI 把它丢进线程池）。
         所以凡是"循环那边还在改的容器"，这里只读两类东西：`len()`，和循环侧**整份换掉**的
-        快照字典（`_queue_stats`/`_skipped_snapshot`——发布之后绝不原地改）。
+        快照字典（`_queue_stats`/`_endpoint_stats`/`_skipped_snapshot`——发布之后绝不原地改）。
         直接迭代在变的字典会偶发 `dictionary changed size during iteration`，而那正好发生在
         "板子很多、有人在盯着健康看"的时候——把一个 500 留在最该说得清的时刻，比少几个字段糟得多。
         """
@@ -1122,6 +1153,8 @@ class CapturePipeline:
             "gateways": len(self._queues),
             "gateways_refused": self.gateways_refused,
             "endpoints": len(self._endpoints),
+            # 旧键的形态（整数）是契约，明细另开一键：`test_capture.py:552` 盯的就是那个整数。
+            "endpoint_stats": list(self._endpoint_stats),
             "queues": list(self._queue_stats),
             "dropped_chunks": self.dropped_chunks,
             "frames": self.frames,

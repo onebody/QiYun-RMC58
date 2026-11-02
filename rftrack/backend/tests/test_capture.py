@@ -844,6 +844,41 @@ def test_health_carries_the_capture_section(client):
     assert section["queues"] == []
 
 
+def test_endpoint_detail_names_which_link_a_frame_came_from(client, chain):
+    """2026-11-01 那次 99,465 个 CRC 错误归不到任何一条流上，只能整场重接。
+    `crc_errors=0` 从此要说清是**哪条**链路的 0。"""
+    pipeline = make_pipeline(client)
+    main, away = chain["main"], chain["away"]
+    run(
+        client,
+        pipeline,
+        (main["gateway_id"], main["ep"], METRICS),
+        (main["gateway_id"], main["ep"], LOG),
+        (away["gateway_id"], away["ep"], METRICS),
+    )
+    rows = {r["endpoint"]: r for r in pipeline.status()["endpoint_stats"]}
+    assert set(rows) == {main["ep"], away["ep"]}
+    assert rows[main["ep"]]["frames"] == 2, "LOG 也是帧：按帧数记，不按能不能落库记"
+    assert rows[main["ep"]]["skipped"] == 1
+    assert rows[main["ep"]]["gateway_id"] == main["gateway_id"]
+    assert rows[away["ep"]]["frames"] == 1
+    for row in rows.values():
+        assert set(row) == {
+            "endpoint", "gateway_id", "source", "frames", "skipped",
+            "crc_errors", "resync_bytes", "last_frame_mono",
+        }
+    # 另一条已经没了：会话散了就不能在明细里留一个 0 帧的尸首
+    pipeline.untap(Link(gateway_id=away["gateway_id"], ep=away["ep"], url="ws://x/uart"))
+    assert {r["endpoint"] for r in pipeline.status()["endpoint_stats"]} == {main["ep"]}
+
+
+def test_endpoint_detail_rides_through_health(client):
+    """/api/health 是运营者唯一会去点的地方；管道侧算得再对，不透出去等于没有。"""
+    body = client.get("/api/health").json()
+    assert "endpoint_stats" in body["capture"]
+    assert isinstance(body["capture"]["endpoints"], int), "旧键的形态是契约，不许顺手改"
+
+
 def test_a_capture_failure_shows_up_as_a_problem(client):
     """上一轮没写成必须进 `problems`：否则"库在写"与"库写不进"在健康检查里长得一样。"""
     capture = client.app.state.capture
