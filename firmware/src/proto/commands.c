@@ -40,6 +40,7 @@
 #include "rh.h"
 #if RX_WIFI_RELAY
 #include "net_prefs.h"
+#include "relay_pipe.h"
 #include "ws_codec.h"
 #include "ws_link.h"
 #endif
@@ -255,16 +256,20 @@ static bool rh_text_start(uint8_t b) { return (b >= 'A' && b <= 'P') || b == 'T'
  * through in its mode costs nothing - and it has to be let through, because
  * the credentials go in before there is a monitor session to send them over. */
 static bool is_net(const char *line) { return !strcmp(line, "NET") || !strncmp(line, "NET ", 4); }
+/* Same shape: "HEAD" and "HEAD <line>", not a line that merely starts with it. */
+static bool is_head(const char *line) { return !strcmp(line, "HEAD") || !strncmp(line, "HEAD ", 5); }
 
 /* The relay image has no scanner: main.c never calls scanner_init(), so its
  * mutex does not exist and scanner_get_config() would block the command task
  * forever - and the radio belongs to the Wi-Fi station, which a scan would
  * retune away from the AP. So only these lines get answered at all. PROTOCOL
  * MONITOR is refused on purpose (set_proto() reads and writes that same
- * config); M2 gives the relay its own way to start the uplink. */
+ * config); "HEAD <line>" is the sweep head's control path (M2): forwarding is
+ * opt-in, so a typo can never look like an answer from a board nobody asked
+ * anything of - and the relay's own INFO still answers about the relay. */
 static bool relay_allowed(const char *line) {
     static const char *const exact[] = {"INFO", "PROTOCOL?", "REBOOT"};
-    if (is_net(line)) return true;
+    if (is_net(line) || is_head(line)) return true;
     for (unsigned j = 0; j < sizeof(exact) / sizeof(exact[0]); j++)
         if (!strcmp(line, exact[j])) return true;
     return false;
@@ -298,7 +303,7 @@ static net_prefs_t net_ram;
 
 static bool rh_allowed(const char *line) {
 #if RX_WIFI_RELAY
-    if (is_net(line)) return true;
+    if (is_net(line) || is_head(line)) return true;
 #endif
     static const char *const exact[] = {"PROTOCOL?", "PROTOCOL MONITOR", "PROTOCOL RH", "INFO", "CONFIG?",
                                         "METRICS RSSI", "METRICS SNR", "METRICS?", "GAIN?", "GAIN HARDWARE",
@@ -693,6 +698,21 @@ static void handle(char *line, link_sink_t sink) {
         gpio_out_set(a, s);
         reply_text("OK\n");
 #if RX_WIFI_RELAY
+    } else if (is_head(line)) {
+        if (!strcmp(line, "HEAD")) {
+            /* Bare HEAD is the state read, the way NET STATUS is: which pair,
+             * which baud, how much has gone up and how much was dropped while
+             * the uplink was down. */
+            char head[180];
+            relay_pipe_status(head, sizeof(head));
+            reply_add("HEAD {%s}\n", head);
+            reply_send();
+            return;
+        }
+        if (!relay_pipe_send(line + 5)) reply_text("ERR head_down\n");
+        /* No local OK on success: the head's own reply *is* the reply, and a
+         * second line would look like a second board answering. */
+        return;
     } else if (is_net(line)) {
         /* "NET x" -> "x"; the value of a setter is everything past its key's
          * space, so a passphrase with spaces in it arrives whole. */
@@ -720,6 +740,18 @@ static void handle(char *line, link_sink_t sink) {
                     return;
                 }
                 strlcpy(net_ram.url, url, sizeof(net_ram.url));
+            }
+        } else if (!strncmp(arg, "UART ", 5)) {
+            /* Which pair the wire is actually on. Runtime because the board's
+             * breakout is not something the chip can tell us (spec 8.1): each
+             * guess would otherwise be a reflash. Takes effect at once - and
+             * only survives a reboot with NET SAVE. */
+            int t = 0, r = 0;
+            if (sscanf(arg + 5, "%d %d", &t, &r) != 2 || t <= 0 || r <= 0) { err = "net_uart"; }
+            else if (!uart_link_open(t, r)) { err = "net_uart_pin"; }
+            else {
+                net_ram.tx = (uint16_t)t;
+                net_ram.rx = (uint16_t)r;
             }
         } else if (!strcmp(arg, "ON")) {
             if (!net_ram.ssid[0] || !net_ram.url[0]) {
@@ -758,11 +790,12 @@ static void handle(char *line, link_sink_t sink) {
         } else if (!strcmp(arg, "STATUS")) {
             /* The pass is deliberately absent: this reply goes to a log and to
              * whoever is watching the port. */
-            char up[200];
+            char up[200], head[180];
             ws_link_status(up, sizeof(up));
-            reply_add("NET {\"on\":%s,\"ssid\":\"%s\",\"url\":\"%s\",\"id\":\"%s\",%s,"
+            relay_pipe_status(head, sizeof(head));
+            reply_add("NET {\"on\":%s,\"ssid\":\"%s\",\"url\":\"%s\",\"id\":\"%s\",%s,%s,"
                       "\"queue_permille\":%u,\"out_drops\":%" PRIu32 "}\n",
-                      net_ram.on ? "true" : "false", net_ram.ssid, net_ram.url, net_ram.id, up,
+                      net_ram.on ? "true" : "false", net_ram.ssid, net_ram.url, net_ram.id, up, head,
                       link_fill_permille_to(LINK_WS), link_drops());
             reply_send();
             return;
@@ -932,9 +965,15 @@ void commands_task_start(void) {
 #endif
     link_set_streaming(false);
     xTaskCreatePinnedToCore(commands_task, "cmd", 6144, (void *)(intptr_t)LINK_USB, 6, NULL, portNUM_PROCESSORS - 1);
+#if !RX_WIFI_RELAY
     if (link_ready(LINK_UART))
         xTaskCreatePinnedToCore(commands_task, "cmd_uart", 6144, (void *)(intptr_t)LINK_UART, 6, NULL,
                                 portNUM_PROCESSORS - 1);
+#else
+    /* Not on the relay: its UART carries the head's *frames*, and a command
+     * reader there would answer a binary stream with ERR command and talk
+     * nonsense back at the sweep head. relay_pipe.c owns those bytes. */
+#endif
 #if RX_WIFI_RELAY
     /* Commands over the uplink too: the platform's console reaches the relay
      * through the bridge, and the replies go back the same way. The classifier
