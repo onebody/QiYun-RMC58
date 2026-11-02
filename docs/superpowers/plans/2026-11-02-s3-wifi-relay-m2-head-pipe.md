@@ -617,6 +617,12 @@ Step 4 之后补一条取证，确认这个 env 真是按 C5 编的（而不是�
 Run: `cd repo/firmware && grep -m1 "Target: espressif32\|board" /tmp/w58-probe/m2-esp32c5-head.log; nm .pio/build/esp32c5-head/firmware.elf | grep -c "c5"`
 Expected: 日志里板子是 `esp32-c5-devkitc-1`（`extends` 继承来的），ELF 里能数出 c5 侧符号。若 `RX_TARGET_C5` 丢了，`uart_link.c` 会走空桩支、`gpio_pullup_en` 与 GP11/12 都不在——现象是"烧进去能起但 UART 一个字节都不出"，所以这条判据不许跳。
 
+**执行期更正（2026-11-02，波特率这条判据的取证方法）**：`-DUART_LINK_BAUD` 落在哪**不能**用这两条判据，都会假阴性——
+- `.pio/build/<env>/compile_commands.json`：IDF 自己生成的那份只有 8 个 `-D`，**不记录 PlatformIO 的 build_flags**（`esp32c5` 也一样查不到 `-DRX_TARGET_C5`，而它在真机上是生效的）。
+- 在 `.o`/`.elf` 里按小端字搜 `921600`/`115200`：波特率是喂给 `uart_param_config()` 的立即数（RISC-V 编成 `lui`），不是数据段里的字，搜到 115200 也多半来自别处。
+
+**能用的三条**：①`pio run -e <env> -v` 首行 `Processing …(build_flags: …)` 会原样回显解析后的 env（`extends` 合并结果一并可见）；②`nm -u .pio/build/<env>/src/proto/uart_link.c.o | grep -cE "uart_driver_install|uart_param_config|gpio_pullup_en"`——C5/中继支是 `3`、扫描 env 空桩支是 `0`，这条同时证明 `-DRX_TARGET_C5` 真的进了编译器；③真机 `NET STATUS` 的 `head_baud`（Task 14 的前置检查）。波特率的**数值**只有 ③ 能定案，本轮如实标"未实测"。
+
 - [ ] **Step 4: 两个 C5 env 编过，且只有 head env 改了速率**
 
 Run:
@@ -625,6 +631,12 @@ cd repo/firmware && /Users/fcj/.local/bin/pio run -e esp32c5 2>&1 | tail -3; \
   /Users/fcj/.local/bin/pio run -e esp32c5-head 2>&1 | tail -3
 ```
 Expected: 两个 `SUCCESS`，且 `esp32c5` 的 `firmware.bin` 字节数与 M1 记录的 **687,680** 一致（差值只应来自 `line_pace.h` 的内联与 `uart_link.c` 的新函数，Task 12 逐项对账）。
+
+**本机踩到的新 env 首建坑（2026-11-02 实测）**：第一次 `pio run -e esp32c5-head` 会为新 env 走 LPE 依赖解析，试图从网络装 `throwtheswitch/Unity@^2.6.1`（`test/` 目录带进来的），本机直连失败报 `HTTPClientError`；挂上代理后改报 `Failed to install Python dependencies into penv`（penv 是 Python 3.14.5，pioarduino 不接受）。**不要**为此动 penv——`.pio/libdeps/<env>/` 只是按 env 分开的缓存，把同依赖的兄弟 env 拷过来即可：
+```bash
+cd repo/firmware/.pio/libdeps && cp -R esp32c5/Unity esp32c5-head/Unity && cp esp32c5/integrity.dat esp32c5-head/integrity.dat
+```
+`integrity.dat` 存的是依赖声明原文（`throwtheswitch/Unity@^2.6.1`），不是哈希，所以同依赖可直接复用。换机器/在 Pi 上重跑时这条要么联网装要么同样拷。
 
 - [ ] **Step 5: 提交**
 
