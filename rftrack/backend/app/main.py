@@ -81,6 +81,27 @@ def mount_workbench(app: FastAPI, settings: Settings) -> dict:
     return {"mounted": True, "reason": None, "dir": str(directory), "index": True}
 
 
+def mount_console(app: FastAPI, settings: Settings) -> dict:
+    """把原 Console（`web/dist/`）挂在 `/app/`，形状与 `mount_workbench` 完全同构。
+
+    同一套"没挂不算故障"的判据：`web/dist/` 在 `.gitignore` 里，一个只跑 API、或还没出前端包
+    的实例挂不上这一页是合法形态。把它报成 `degraded` 的代价与工作台那条一样——运营者会开始
+    忽略 `degraded`。
+
+    这一节**不改变单机口径**：Web Serial 直连、`serve.mjs` 的 `serial:`/`uart:` 与 RotorHazard
+    路径一行没碰，页面离线也能用（约束 9、10）。构建用 `base: "./"`（`web/vite.config.ts:60`），
+    所以挂在 `/app/` 这个前缀下引用仍然指得回来。
+    """
+    directory = settings.console_dir
+    if directory is None:
+        return {"mounted": False, "reason": "disabled", "dir": None, "index": False}
+    index = (directory / "index.html").is_file()
+    if not index:
+        return {"mounted": False, "reason": "no_index_html", "dir": str(directory), "index": False}
+    app.mount("/app", StaticFiles(directory=str(Path(directory)), html=True), name="console")
+    return {"mounted": True, "reason": None, "dir": str(directory), "index": True}
+
+
 def create_app(
     settings: Settings | None = None,
     transport: HttpTransport | None = None,
@@ -180,6 +201,8 @@ def create_app(
     app.state.schema_gaps = None
     #: 页面挂没挂、为什么没挂——`/api/health` 的 `workbench` 一节就是这个字典。
     app.state.workbench = mount_workbench(app, settings)
+    #: 原 Console 挂在 `/app/`：同一套"可选件缺失不算故障"的判据（见 `mount_console`）。
+    app.state.console = mount_console(app, settings)
 
     app.include_router(health.router)
     app.include_router(sites.router)

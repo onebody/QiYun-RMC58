@@ -152,6 +152,62 @@ class FrameStream:
         return out
 
 
+# --- 文本行里的设备身份：`INFO` 是后端解析缺口，不是设备协议缺口 ----------------
+
+
+#: `INFO` 行第一段必须是这个魔数——它是"这块板会说话"的唯一凭据。认不出就整行不认：
+#: `Node.protocol_version` 里躺着一个软件猜的 `1`，比 `NULL` 难查得多。
+INFO_MAGIC = "widscan58"
+
+
+def _segment(value: str) -> str | None:
+    """空段一律成 `None`。空串落进库会变成"板子说了，说的是没有"。"""
+    value = value.strip()
+    return value or None
+
+
+def _protocol_number(value: str | None) -> int | None:
+    return int(value) if value is not None and value.isdigit() else None
+
+
+def parse_info_line(line: str) -> dict | None:
+    """`INFO` 文本行 → 设备身份；不是身份行回 `None`，绝不回半截真相。
+
+    固件现形（`firmware/src/proto/commands.c:426`）是竖线分隔的六段
+    `widscan58|<target>|<proto>|<fw>|<commit>|<phy>`。PHY 版本自己带空格，所以它只能在最后
+    一格并整段留下。老固件是空格分隔、没有 HEAD 时间那一格——两种形都认，但**缺了 fw 那一格
+    一律不认**：身份里唯一不能少的就是它。
+    """
+    text = line.strip()
+    if text.startswith("INFO "):
+        text = text[5:].strip()
+    if not text:
+        return None
+    if "|" in text:
+        parts = text.split("|", 5)
+    else:
+        parts = text.split(None, 4)
+    if parts[0] != INFO_MAGIC or len(parts) < 4:
+        return None
+    fw = _segment(parts[3])
+    if fw is None:
+        return None
+    # 竖线形有 HEAD 时间那一格，空格形没有：老固件的第 5 段是 PHY，不是 commit。
+    if len(parts) > 4 and "|" in text:
+        commit = _segment(parts[4])
+        phy = _segment(parts[5]) if len(parts) > 5 else None
+    else:
+        commit = None
+        phy = _segment(parts[4]) if len(parts) > 4 else None
+    return {
+        "target": _segment(parts[1]),
+        "protocol_version": _protocol_number(_segment(parts[2])),
+        "fw_version": fw,
+        "commit_time": commit,
+        "phy_version": phy,
+    }
+
+
 # --- 字段解码：每个函数对应 frames.ts 里的一个 parseX ----------------------
 
 

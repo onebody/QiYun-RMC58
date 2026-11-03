@@ -37,7 +37,7 @@ from datetime import datetime
 from time import monotonic
 from typing import Any, Protocol, Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from ..config import Settings
 from ..database import Database
@@ -163,6 +163,11 @@ class _Endpoint:
     #: 2026-11-01 的 99,465 个 CRC 只能整场重接，就是因为当时只有全局。
     frames_seen: int = 0
     skipped_seen: int = 0
+    #: 这块板报过的身份（`parse_info_line` 的产物）。`identity_written` 是**已经落库**的那一份，
+    #: `identity_pending` 是"解析到了、还没轮到写"的那一份：要不要写只比较这两者，所以同一条
+    #: 会话里板子把同一份身份报三遍，落库那边只有一次 UPDATE。
+    identity_written: dict | None = None
+    identity_pending: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -190,6 +195,11 @@ class _Job:
     #: 与 `events` 同序的主键：行落库之后才拿得到，用来让 `/ws/live` 那条事件与
     #: `GET /api/events` 里那一行是**同一个对象**（见 `_publish_event`）。
     event_ids: list[int] = field(default_factory=list)
+    #: 这一轮要写进 `node` 的设备身份，纯数据：`{gateway_id, ep, transport_addr, identity}`，
+    #: 写成之后由 `write()` 往同一条目上补一个 `applied`。放同一张 `_Job` 而不是各自开一条
+    #: 写路，为的是"摘要落库失败时身份也别单独落"——一轮一次事务是这里的既有纪律，多一条自主
+    #: 提交的多写者路径就把它作废了。
+    identities: list[dict[str, Any]] = field(default_factory=list)
     summary_written: int = 0
     error: str | None = None
 
@@ -309,6 +319,9 @@ class CapturePipeline:
         # --- 计数：每一条都得能在 /api/health 里指认，"看起来在跑"不是可交付的事实 ---
         self.frames = 0
         self.text_lines = 0
+        #: 身份真的写进 `node` 的次数（不是解析到的次数）：与 `text_lines` 分开才看得出
+        #: "板子报了三遍、我们落了一遍"和"报了三遍、库里有三行"是两种不同的故障。
+        self.identity_writes = 0
         self.crc_errors = 0
         self.resync_bytes = 0
         self.skipped_frames: dict[str, int] = {}
@@ -625,6 +638,7 @@ class CapturePipeline:
         for piece in items:
             if piece.kind == "text":
                 self.text_lines += 1
+                self._take_identity(endpoint, piece.line)
                 continue
             self._frame(endpoint, piece)
         # 只要这条流还在吐东西（帧或文本行）就说明板子活着：只数采样帧的话，
@@ -635,6 +649,18 @@ class CapturePipeline:
         self.resync_bytes += endpoint.stream.resync_bytes - before_resync
         endpoint.crc_seen = endpoint.stream.crc_errors
         endpoint.resync_seen = endpoint.stream.resync_bytes
+
+    def _take_identity(self, endpoint: _Endpoint, line: str) -> None:
+        """`INFO` 行里的设备身份：认出来只**记账**，落库留给下一轮的 `prepare()`。
+
+        这一条不改 `text_lines` 的口径：不是身份的行照样数进"文本行"。于是"这块板一句话没说"
+        （`text_lines` 为 0）与"说了一句我们认不出的"（`text_lines` 有数、`identity_writes` 为 0）
+        在健康检查里是两件事，而不是同一个 0。
+        认不出的一律不写：`Node.protocol_version` 里躺着一个软件猜的 `1`，比 `NULL` 难查得多。
+        """
+        info = frame_parser.parse_info_line(line)
+        if info is not None and info != endpoint.identity_written:
+            endpoint.identity_pending = info
 
     def _count_skipped(self, name: str) -> None:
         """按帧类型名计数，并**整份换出**一份给健康检查读的快照。
@@ -865,7 +891,23 @@ class CapturePipeline:
         """
         self._flush_feed_windows()
         rows = self._retry_rows + self.aggregator.drain()
-        return _Job(rows=rows, events=self._transitions())
+        return _Job(
+            rows=rows,
+            events=self._transitions(),
+            identities=[
+                {
+                    "gateway_id": endpoint.gateway_id,
+                    "ep": endpoint.ep,
+                    "transport_addr": endpoint.transport_addr,
+                    "identity": endpoint.identity_pending,
+                }
+                for endpoint in self._endpoints.values()
+                # 地址还没认领下来的一律**留着**：身份写进哪个节点行是由 (网关, 地址) 定的，
+                # 拿 `ep` 去猜地址正是 `test_capture` 钉死不许做的那件事。
+                if endpoint.identity_pending is not None
+                and endpoint.transport_addr is not None
+            ],
+        )
 
     def _transitions(self) -> list[dict[str, Any]]:
         """断流与恢复：只在"这条流还开着"的前提下说话。
@@ -1015,6 +1057,23 @@ class CapturePipeline:
                     record = SignalEvent(**fields)
                     session.add(record)
                     written.append(record)
+                for entry in job.identities:
+                    # 只写 `node` 上**今天就有**的那两列：target / commit / PHY 要等
+                    # `008_node_identity` 给出列再落——阶段 2 的定义是零迁移。
+                    hit = session.execute(
+                        update(Node)
+                        .where(
+                            Node.gateway_id == entry["gateway_id"],
+                            Node.transport_addr == entry["transport_addr"],
+                        )
+                        .values(
+                            fw_version=entry["identity"]["fw_version"],
+                            protocol_version=entry["identity"]["protocol_version"],
+                        )
+                    )
+                    # 一行都没碰上（节点行还没被 `reconcile` 建出来）就不算写成：`settle` 会把
+                    # 这份身份留在端点上等下一轮，而不是让它跟着一次空 UPDATE 永远消失。
+                    entry["applied"] = hit.rowcount > 0
             # 提交之后再读主键：`scope()` 的 commit 会先 flush，这时 SQLite 才把自增 id 填回对象。
             job.event_ids = [record.event_id for record in written]
             job.error = None
@@ -1061,6 +1120,18 @@ class CapturePipeline:
             return
         self.ticks += 1
         self.events_written += len(job.events)
+        for entry in job.identities:
+            if not entry.get("applied"):
+                continue
+            self.identity_writes += 1
+            endpoint = self._endpoints.get((entry["gateway_id"], entry["ep"]))
+            if endpoint is None:
+                continue  # 会话已经撤了：那份身份跟着这条流一起没，重连时板子会再报一次
+            endpoint.identity_written = entry["identity"]
+            # 写库那几步在另一个线程里跑，期间 worker 可能已经报来**更新的一份**身份；
+            # 只有手里这份还是最新时才清掉待写，否则留给下一轮——不然丢的是一次真实的换板。
+            if endpoint.identity_pending == entry["identity"]:
+                endpoint.identity_pending = None
         self.last_flush_at = utcnow()
         self.last_error = None
         self._retry_rows = []
@@ -1159,6 +1230,7 @@ class CapturePipeline:
             "dropped_chunks": self.dropped_chunks,
             "frames": self.frames,
             "text_lines": self.text_lines,
+            "identity_writes": self.identity_writes,
             "skipped_frames": self._skipped_snapshot,
             "crc_errors": self.crc_errors,
             "resync_bytes": self.resync_bytes,

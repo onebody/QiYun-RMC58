@@ -170,4 +170,6 @@ def health(request: Request, session: Session = Depends(get_session)) -> dict:
         # 页面挂没挂。工作台是可选件，所以这一节只呈现事实、不参与 `status` 判定：
         # 把"这台只提供 API"报成 degraded，运营者就会开始忽略 degraded。
         "workbench": request.app.state.workbench,
+        # 原 Console（`/app/`）同一套口径：可选件，只呈现事实，不进 `problems`。
+        "console": request.app.state.console,
     }

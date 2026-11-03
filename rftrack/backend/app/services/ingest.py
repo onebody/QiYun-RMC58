@@ -1,14 +1,16 @@
 """端点表 → 节点行：serve.mjs 的 `/api/endpoints` 是本系统唯一的节点事实来源。
 
-写入路径只有这里（读侧是 `routers/nodes.py`），所以三条硬口径在本文件收口：
+节点行的建、改与判死只在这里（读侧是 `routers/nodes.py`），所以三条硬口径在本文件收口：
 
 - **身份键 `(gateway_id, transport_addr)`**（唯一约束 `uq_node_gateway_addr`）。
   显示名一律不参与去重：两台接入机各报一块 `/dev/widscan58-1` 就是两块板，
   按名字合并会让一个物理位置的板子"消失"在另一个位置的列表里。
 - **只落对端声明过的东西**。`/api/endpoints` 到今天不报固件版本、不报协议版本、
-  不报任何数据能力（见 §7 S2 偏差①），所以 `fw_version`/`protocol_version`/
-  `capabilities_json` 三列必须留 NULL，由读侧渲染成 `unsupported`。显式声明走
+  不报任何数据能力（见 §7 S2 偏差①），所以这里把 `fw_version`/`protocol_version`/
+  `capabilities_json` 三列留 NULL，由读侧渲染成 `unsupported`。显式声明走
   `PUT /api/nodes/{id}`（契约 §4），不在这里代填。
+  唯一的例外是 `services/capture.py`：板子自己在 `INFO` 行里报了版本，那两个数是
+  **设备说的**，与这里"不代填"同一条纪律，不是第三条写入路径。
 - **消失只转 `lost`，不删行**。删了就无法回答"那块板昨天还在不在"，而那是判
   "接触不良"还是"真被拔走"的唯一证据。
 

@@ -12,6 +12,10 @@ DEFAULT_DB_PATH = BACKEND_DIR / "data" / "rftrack.sqlite3"
 #: 工作台是同源静态目录（不起 CORS、也不给页面第二个入口）。
 #: 相对 `backend/` 定位而不是相对 cwd：uvicorn 从哪儿起都不影响页面能不能打开。
 DEFAULT_WORKBENCH_DIR = BACKEND_DIR.parent / "frontend" / "workbench"
+#: 原 Console 的构建产物（`web/dist/`，`base: "./"` 所以能挂在任何前缀下）。它在
+#: `.gitignore` 里，所以"默认值指向一个可能不存在的目录"是常态而不是配错——挂不上由
+#: `/api/health` 的 `console` 一节如实说，不算故障。
+DEFAULT_CONSOLE_DIR = BACKEND_DIR.parents[1] / "web" / "dist"
 
 #: 汇聚实例只做只读拉取，不接受本地拨号（见 docs/rf-track/ 落地方案 §5）。
 INSTANCE_ROLES = ("site", "aggregator")
@@ -158,6 +162,9 @@ class Settings:
     #: （空串）= 这台实例只提供 API，页面另说——那时 `/api/health` 的 `workbench` 一节
     #: 如实回 `mounted=false`，不让运营者对着 404 猜是哪一步没做。
     workbench_dir: Path | None = DEFAULT_WORKBENCH_DIR
+    #: 原 Console 静态目录，挂在 `/app/`。`RFTRACK_WEB_DIR=`（空串）= 这台实例不发这一页；
+    #: 单机侧完全不受影响（Web Serial 直连与 `serve.mjs` 那条路一行没碰）。
+    console_dir: Path | None = DEFAULT_CONSOLE_DIR
     # --- S7：插件运行时的队列容量 ----------------------------------------------
     #: 每 (插件, 网关) 一条有界队列的容量（批数）。`plugin_registry.queue_limit` 为 NULL 时
     #: 跟随它——那一列是"这一支插件自己收紧/放宽"的位，这里是"这台机器整体能承受多少"。
@@ -190,6 +197,8 @@ class Settings:
         object.__setattr__(self, "db_path", Path(self.db_path))
         if self.workbench_dir is not None:
             object.__setattr__(self, "workbench_dir", Path(self.workbench_dir))
+        if self.console_dir is not None:
+            object.__setattr__(self, "console_dir", Path(self.console_dir))
         if self.replay_dir is not None:
             object.__setattr__(self, "replay_dir", Path(self.replay_dir))
         if self.instance_role not in INSTANCE_ROLES:
@@ -300,6 +309,7 @@ class Settings:
             workbench_dir=_optional_path(
                 source.get("RFTRACK_WORKBENCH_DIR"), DEFAULT_WORKBENCH_DIR
             ),
+            console_dir=_optional_path(source.get("RFTRACK_WEB_DIR"), DEFAULT_CONSOLE_DIR),
             plugin_queue_limit=int(source.get("RFTRACK_PLUGIN_QUEUE_LIMIT", "64")),
             plugins_enabled=_bool(
                 source.get("RFTRACK_PLUGINS_ENABLED", "1"), "RFTRACK_PLUGINS_ENABLED"
