@@ -1,4 +1,4 @@
-// Desktop shell for the widscan58 web page. Loads web/dist over a private
+// Desktop shell for the QiYun-RMC58 web page. Loads web/dist over a private
 // app:// protocol (secure context, so Web Serial / Web USB work) and provides
 // the serial / USB device chooser UI Electron does not ship by default.
 // webSecurity is off because the page must talk to a plain-http RotorHazard
@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DIST = resolve(here, "dist");
-const HOST = "widscan58";
+const HOST = "qiyun-rmc58";
 
 const TYPES = new Map(
   Object.entries({
@@ -44,7 +44,7 @@ function createWindow() {
     height: 880,
     minWidth: 720,
     minHeight: 540,
-    title: "widscan58",
+    title: "QiYun-RMC58",
     autoHideMenuBar: true,
     icon: join(DIST, "icon-512.png"),
     webPreferences: {
@@ -98,16 +98,16 @@ app.whenReady().then(() => {
   });
 
   const ses = session.defaultSession;
-  // WIDSCAN58_AUTO_SERIAL=<substring> auto-picks the first matching port
-  // instead of showing the chooser (used for automated end-to-end tests).
-  const autoSerial = process.env.WIDSCAN58_AUTO_SERIAL;
+  // QIYUN_RMC58_AUTO_SERIAL=<substring> (or legacy WIDSCAN58_AUTO_SERIAL) auto-picks the first
+  // matching port instead of showing the chooser (used for automated end-to-end tests).
+  const autoSerial = process.env.QIYUN_RMC58_AUTO_SERIAL ?? process.env.WIDSCAN58_AUTO_SERIAL;
   ses.on("select-serial-port", (event, portList, _contents, callback) => {
     console.log("[serial] chooser event, ports:", portList.map((p) => `${p.portName} (${p.displayName ?? "?"}) vid=0x${p.usbVendorId?.toString(16)}`));
     event.preventDefault();
     if (autoSerial) {
       const hit = portList.find((p) => `${p.portName} ${p.displayName ?? ""}`.includes(autoSerial));
       if (hit) return callback(hit.portId);
-      console.warn("[serial] no port matches WIDSCAN58_AUTO_SERIAL=", autoSerial);
+      console.warn("[serial] no port matches QIYUN_RMC58_AUTO_SERIAL / WIDSCAN58_AUTO_SERIAL=", autoSerial);
     }
     void pickDevice("serial", portList, "串口").then((portId) => callback(portId));
   });

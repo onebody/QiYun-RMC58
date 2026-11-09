@@ -1,8 +1,8 @@
-# Widscan58
+# QiYun-RMC58（骑云射频监测平台）
 
 **A 5.8 GHz FPV channel scanner made from an ESP32-C5.**
 
-Widscan58 uses the Wi-Fi radio inside the ESP32-C5 as a software-defined radio.
+QiYun-RMC58 uses the Wi-Fi radio inside the ESP32-C5 as a software-defined radio.
 Instead of decoding Wi-Fi, it reads raw I/Q samples straight from the radio,
 and shows what is on each FPV video channel: signal strength, noise floor, SNR,
 video bandwidth / peak, and a live spectrum of the whole band.
@@ -11,14 +11,12 @@ Use it at the field to find a clear channel or check pilot VTX frequencies from 
 The device can also act as an 8 channel RX5808 array for RotorHazard race timing,
 or a simple standalone lap timer running in the web browser.
 
-widscan58 is a words smash-em-up of WiFi, Video, Scan and 5.8GHz
+## ▶ [Open the live web UI](https://onebody.github.io/QiYun-RMC58/)
 
-## ▶ [Open the live web UI](https://onebody.github.io/widscan58/)
-
-**https://onebody.github.io/widscan58/** (Chrome, Edge or Firefox on desktop,
+**https://onebody.github.io/QiYun-RMC58/** (Chrome, Edge or Firefox on desktop,
 or Chrome on Android)
 
-![The Widscan58 web UI scanning Raceband R1–R8 on an ESP32-C5](images/webui.png)
+![The QiYun-RMC58 web UI scanning Raceband R1–R8 on an ESP32-C5](images/webui.png)
 
 *Live from a XIAO ESP32-C5 scanning Raceband: two VTXs on R1 and R6 (SNR 36 and
 41 dB), with Wi-Fi bursts around R3–R4. Each channel updates about 50 times a
@@ -58,7 +56,7 @@ second.*
 
 ## Hardware
 
-Widscan58 runs on the **ESP32-C5**, Espressif's dual-band (2.4 + 5 GHz) Wi-Fi
+QiYun-RMC58 runs on the **ESP32-C5**, Espressif's dual-band (2.4 + 5 GHz) Wi-Fi
 chip. It is developed and tested on the
 [Seeed Studio XIAO ESP32-C5](https://wiki.seeedstudio.com/xiao_esp32c5_getting_started/)
 and the Waveshare ESP32-C5-Zero. Other ESP32-C5 boards work too, such as the C5
@@ -78,7 +76,7 @@ green).
 ## Getting started
 
 1. Plug the ESP32-C5 into your computer or Android phone over USB.
-2. Open the [web UI](https://onebody.github.io/widscan58/) in Chrome, Edge or
+2. Open the [web UI](https://onebody.github.io/QiYun-RMC58/) in Chrome, Edge or
    Firefox on desktop, or Chrome on Android.
 3. Click **Flash device** and follow the steps to install the firmware; pick a
    firmware version if the page offers more than one.
@@ -87,7 +85,7 @@ green).
 
 ## Credits
 
-Widscan58 would not exist without **[C5VRX](https://github.com/Twotoz/C5VRX)** and
+QiYun-RMC58 would not exist without **[C5VRX](https://github.com/Twotoz/C5VRX)** and
 the derived **[esp-sdr](https://github.com/ESPARGOS/esp-sdr)** projects.
 The hidden debug path that lets an ESP32 capture raw I/Q samples from its own radio
 is instrumental to the explosion of projects using this path. The radio capture,
