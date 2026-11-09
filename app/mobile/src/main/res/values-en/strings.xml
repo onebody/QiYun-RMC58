@@ -2,9 +2,9 @@
 <!-- English. The unqualified ../values/strings.xml is Chinese and is the fallback
      for every other language. GPL-3.0-or-later. -->
 <resources>
-    <string name="app_name">Widscan58</string>
+    <string name="app_name">QiYun-RMC58</string>
     <string name="probe_name">USB probe</string>
-    <string name="plug_in">Plug in the Widscan58 board over USB-C.</string>
+    <string name="plug_in">Plug in the board over USB-C.</string>
     <string name="scan_start">Start</string>
     <string name="scan_stop">Stop</string>
     <string name="holds">Holds</string>

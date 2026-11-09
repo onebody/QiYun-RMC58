@@ -95,7 +95,7 @@ def stage(a: argparse.Namespace) -> None:
         builds.append({"chipFamily": CHIP_FAMILY[env], "parts": parts})
         print(f"{a.id + '/' if a.id else ''}{env}: " + ", ".join(f"{p['path']} @ {p['offset']:#x}" for p in parts))
 
-    manifest = {"name": "Widscan58", "version": version, "date": date, "builds": builds}
+    manifest = {"name": "QiYun-RMC58", "version": version, "date": date, "builds": builds}
     (dest / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"{dest / 'manifest.json'}: {version}")
 

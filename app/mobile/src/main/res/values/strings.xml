@@ -4,9 +4,9 @@
      Unit symbols (dBFS, MHz) and the band letters stay as they are in both.
      GPL-3.0-or-later. -->
 <resources>
-    <string name="app_name">Widscan58</string>
+    <string name="app_name">骑云射频监测平台</string>
     <string name="probe_name">USB 探测</string>
-    <string name="plug_in">请用 USB-C 连接 Widscan58 板卡。</string>
+    <string name="plug_in">请用 USB-C 连接板卡。</string>
     <string name="scan_start">开始</string>
     <string name="scan_stop">停止</string>
     <string name="holds">峰值保持</string>

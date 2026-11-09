@@ -19,5 +19,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "widscan58-android"
+rootProject.name = "qiyun-rmc58-android"
 include(":core", ":mobile")

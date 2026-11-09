@@ -47,7 +47,7 @@ const FIRMWARE_DIR = "./firmware/";
  *  deploy on every push. localStorage widscan58.fwUrl overrides it (e.g. a
  *  mirror); an unreachable URL just falls back to the bundled copy. */
 const ONLINE_FIRMWARE_DIR =
-  (localStorage.getItem("widscan58.fwUrl") ?? "https://onebody.github.io/widscan58/firmware/").replace(/\/*$/, "/");
+  (localStorage.getItem("widscan58.fwUrl") ?? "https://onebody.github.io/QiYun-RMC58/firmware/").replace(/\/*$/, "/");
 
 /** Watchdog registers, from esptool's targets/<chip>.py. esptool-js 0.7 neither
  *  disables these on connect nor implements a watchdog reset for the C5. */

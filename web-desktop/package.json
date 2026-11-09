@@ -1,11 +1,11 @@
 {
-  "name": "widscan58-desktop",
-  "productName": "widscan58",
+  "name": "qiyun-rmc58-desktop",
+  "productName": "QiYun-RMC58",
   "version": "0.9.0",
   "private": true,
   "license": "GPL-3.0-or-later",
-  "description": "widscan58 web page packaged as a desktop app (Web Serial / Web USB)",
-  "author": "widscan58",
+  "description": "QiYun-RMC58 web page packaged as a desktop app (Web Serial / Web USB)",
+  "author": "QiYun-RMC58",
   "type": "module",
   "main": "main.mjs",
   "scripts": {
@@ -15,8 +15,8 @@
     "dist:win": "npm run sync-dist && electron-builder --win zip --x64"
   },
   "build": {
-    "appId": "org.widscan58.web",
-    "productName": "widscan58",
+    "appId": "org.qiyun.rmc58",
+    "productName": "QiYun-RMC58",
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -42,7 +42,7 @@
         "NSSupportsSuddenTermination": false,
         "NSAppSleepDisabled": true
       },
-      "artifactName": "widscan58-web-${version}-mac-arm64.${ext}"
+      "artifactName": "QiYun-RMC58-${version}-mac-arm64.${ext}"
     },
     "win": {
       "target": [
@@ -54,7 +54,7 @@
         }
       ],
       "icon": "build/icon.png",
-      "artifactName": "widscan58-web-${version}-win-x64.${ext}"
+      "artifactName": "QiYun-RMC58-${version}-win-x64.${ext}"
     }
   },
   "devDependencies": {
