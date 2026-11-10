@@ -137,7 +137,7 @@ bool ws_parse_url(const char *url, char *host, size_t host_cap, uint16_t *port, 
                   const char **why) {
     *why = "url";
     /* Accept both "ws://host[:port][/path]" and the bare "host[:port][/path]"
-     * the setup page saves — the operator types "192.168.8.156:8080" and the
+     * the setup page saves — the operator types "192.168.1.156:8080" and the
      * scheme is implied. Only ws exists here; wss needs TLS we don't ship. */
     const char *rest = url;
     if (!strncmp(url, "wss://", 6)) {

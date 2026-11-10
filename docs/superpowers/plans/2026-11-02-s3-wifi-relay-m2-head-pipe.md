@@ -6,7 +6,7 @@
 
 **Architecture:** S3 中继镜像新增一条"扫频头字节管道"：一个读任务把 `uart_link_read` 拿到的字节直接 `link_raw_to(LINK_WS, …)`，复用 M1 已有的 32 KiB 有界队列 + drops 账 + 单条 WS 写任务；C5 侧只改两处——UART 线路速率与由它换算出的 pace 钳位（@115200 换算结果与今天的 9000 B/s、512 bins 逐值相同）。命令面加 `HEAD <line>` 做显式转发、`NET UART <tx> <rx>` 做引脚现场可改。
 
-**Tech Stack:** ESP-IDF 5.5.5 / pioarduino 55.03.312-1、PlatformIO 6.2.0（`/Users/fcj/.local/bin/pio`，**不用** `~/.platformio/penv/bin/pio`）、Unity（`pio test -e native`）、FastAPI + SQLAlchemy + pytest、Node 20（`node --test`、`web/serve.mjs` 桥 0 改动）。
+**Tech Stack:** ESP-IDF 5.5.5 / pioarduino 55.03.312-1、PlatformIO 6.2.0（`~/.local/bin/pio`，**不用** `~/.platformio/penv/bin/pio`）、Unity（`pio test -e native`）、FastAPI + SQLAlchemy + pytest、Node 20（`node --test`、`web/serve.mjs` 桥 0 改动）。
 
 **Spec:** `docs/superpowers/specs/2026-11-01-s3-wifi-relay-design.md`（§1 分歧 A/B、§3 带宽预算、§4 改动清单、§6 门槛表、§8 开放项）
 **分支：** `fw-wifi-relay`（M1 已在此分支上，远端 tip 用 `git rev-parse fork/fw-wifi-relay` 现取）
@@ -160,7 +160,7 @@ int main(void) {
 
 - [x] **Step 2: 跑到它失败**
 
-Run: `cd repo/firmware && /Users/fcj/.local/bin/pio test -e native 2>&1 | tail -20`
+Run: `cd repo/firmware && ~/.local/bin/pio test -e native 2>&1 | tail -20`
 Expected: 编译失败 `fatal error: ../../src/proto/line_pace.h: No such file or directory`。
 
 - [x] **Step 3: 写实现**
@@ -205,7 +205,7 @@ static inline uint16_t pace_spec_bins(uint32_t baud, uint32_t tx_ring_bytes) {
 
 - [x] **Step 4: 跑到通过**
 
-Run: `cd repo/firmware && /Users/fcj/.local/bin/pio test -e native 2>&1 | tail -12`
+Run: `cd repo/firmware && ~/.local/bin/pio test -e native 2>&1 | tail -12`
 Expected: 全绿，且总数从 M1 的 **29** 变成 **34**（`test_pace` 5 条）。
 
 - [x] **Step 5: 提交**
@@ -471,7 +471,7 @@ build_flags = -DRX_TARGET_S3=1 -DRX_WIFI_RELAY=1 -DUART_LINK_BAUD=921600
 Run:
 ```bash
 cd repo/firmware && for e in esp32s3 esp32c5 esp32s3-relay; do \
-  /Users/fcj/.local/bin/pio run -e $e 2>&1 | tail -3 | grep -E "SUCCESS|Error" | sed "s/^/  $e: /"; done
+  ~/.local/bin/pio run -e $e 2>&1 | tail -3 | grep -E "SUCCESS|Error" | sed "s/^/  $e: /"; done
 ```
 Expected: 三行都 `SUCCESS`。（**不并行跑 pio**——并发会死锁，逐条 `for`。）
 若报 `SOC_GPIO_PIN_COUNT` 未定义，在 `uart_link.c` 顶部加 `#include "soc/soc.h"` 再重跑；这是唯一允许的机械修正，别改判据。
@@ -627,8 +627,8 @@ Expected: 日志里板子是 `esp32-c5-devkitc-1`（`extends` 继承来的），
 
 Run:
 ```bash
-cd repo/firmware && /Users/fcj/.local/bin/pio run -e esp32c5 2>&1 | tail -3; \
-  /Users/fcj/.local/bin/pio run -e esp32c5-head 2>&1 | tail -3
+cd repo/firmware && ~/.local/bin/pio run -e esp32c5 2>&1 | tail -3; \
+  ~/.local/bin/pio run -e esp32c5-head 2>&1 | tail -3
 ```
 Expected: 两个 `SUCCESS`，且 `esp32c5` 的 `firmware.bin` 字节数与 M1 记录的 **687,680** 一致（差值只应来自 `line_pace.h` 的内联与 `uart_link.c` 的新函数，Task 12 逐项对账）。
 
@@ -781,7 +781,7 @@ endif()
 
 Run:
 ```bash
-cd repo/firmware && /Users/fcj/.local/bin/pio run -e esp32s3-relay 2>&1 | tail -3; \
+cd repo/firmware && ~/.local/bin/pio run -e esp32s3-relay 2>&1 | tail -3; \
   find .pio/build/esp32s3 -name "relay_pipe*" | wc -l
 ```
 Expected: `SUCCESS`，且 `0`（扫描 env 里不存在这个对象文件——这条是「编译期隔离优先」的真判据，不是注释）。
@@ -987,9 +987,9 @@ static bool rh_allowed(const char *line) {
 
 Run:
 ```bash
-cd repo/firmware && /Users/fcj/.local/bin/pio run -e esp32s3-relay 2>&1 | tail -3 && \
-  /Users/fcj/.local/bin/pio run -e esp32c5 2>&1 | tail -3 && \
-  /Users/fcj/.local/bin/pio test -e native 2>&1 | tail -6
+cd repo/firmware && ~/.local/bin/pio run -e esp32s3-relay 2>&1 | tail -3 && \
+  ~/.local/bin/pio run -e esp32c5 2>&1 | tail -3 && \
+  ~/.local/bin/pio test -e native 2>&1 | tail -6
 ```
 Expected: 两个 `SUCCESS`，native `34` 条全绿。
 
@@ -1081,7 +1081,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
 Run:
 ```bash
 cd repo/firmware && grep -n "static char why\|char why\[" src/net/ws_link.c; \
-  /Users/fcj/.local/bin/pio run -e esp32s3-relay 2>&1 | tail -3
+  ~/.local/bin/pio run -e esp32s3-relay 2>&1 | tail -3
 ```
 Expected: `why` 是 `static char why[24]`（或更大），`SUCCESS`。若 `why` 小于 `"no_ip"`+NUL 之外的余量，把它的尺寸写进 Step 3 的提交信息而不是悄悄扩容。
 
@@ -1642,7 +1642,7 @@ Expected: `65/65`。
 
 - [x] **Step 5: native 门槛**
 
-Run: `cd repo/firmware && /Users/fcj/.local/bin/pio test -e native 2>&1 | tail -6`
+Run: `cd repo/firmware && ~/.local/bin/pio test -e native 2>&1 | tail -6`
 Expected: `34` 条全绿。
 
 - [x] **Step 6: 四个 env 全编 + 体积账**
@@ -1650,7 +1650,7 @@ Expected: `34` 条全绿。
 Run:
 ```bash
 cd repo/firmware && for e in esp32s3 esp32c5 esp32c5-head esp32s3-relay; do \
-  /Users/fcj/.local/bin/pio run -e $e >/tmp/w58-probe/m2-$e.log 2>&1; \
+  ~/.local/bin/pio run -e $e >/tmp/w58-probe/m2-$e.log 2>&1; \
   printf "%-16s %s  %s\n" "$e" "$(grep -c SUCCESS /tmp/w58-probe/m2-$e.log)" \
     "$(ls -l .pio/build/$e/firmware.bin | awk '{print $5}')"; done
 ```
