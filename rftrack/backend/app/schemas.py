@@ -123,6 +123,15 @@ class NodeOut(BaseModel):
     declaration_error: str | None = None
     fw_version: str | None
     protocol_version: int | None
+    #: 这一行的版本是谁说的：`info_line`（板子自己报的）、`manual`（操作员 PUT 的）、
+    #: `None`（还没人说过）。值相同不代表来源相同——手打的会过期，板子不会。
+    identity_source: str | None = None
+    #: 以下三格只有 INFO 行里有，端点表与 `PUT` 都给不出，所以未报就是 `None`。
+    identity_target: str | None = None
+    commit_time: str | None = None
+    phy_version: str | None = None
+    #: 这块板的时钟可信到什么程度：`unsynced` 是一句事实陈述，不是缺数据。
+    time_sync_quality: str = "unsynced"
     status: str
     last_seen: datetime | None
     stops_rh: bool

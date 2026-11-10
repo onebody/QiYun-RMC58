@@ -9,8 +9,9 @@
   不报任何数据能力（见 §7 S2 偏差①），所以这里把 `fw_version`/`protocol_version`/
   `capabilities_json` 三列留 NULL，由读侧渲染成 `unsupported`。显式声明走
   `PUT /api/nodes/{id}`（契约 §4），不在这里代填。
-  唯一的例外是 `services/capture.py`：板子自己在 `INFO` 行里报了版本，那两个数是
-  **设备说的**，与这里"不代填"同一条纪律，不是第三条写入路径。
+  唯一的例外是 `services/capture.py`：板子自己在 `INFO` 行里报了版本、target、构建时间与
+  PHY 版本，那些数是**设备说的**（`identity_source='info_line'` 记下这一点），与这里
+  "不代填"同一条纪律，不是第三条写入路径。
 - **消失只转 `lost`，不删行**。删了就无法回答"那块板昨天还在不在"，而那是判
   "接触不良"还是"真被拔走"的唯一证据。
 

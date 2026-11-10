@@ -173,9 +173,12 @@ def _protocol_number(value: str | None) -> int | None:
 def parse_info_line(line: str) -> dict | None:
     """`INFO` 文本行 → 设备身份；不是身份行回 `None`，绝不回半截真相。
 
-    固件现形（`firmware/src/proto/commands.c:426`）是竖线分隔的六段
-    `widscan58|<target>|<proto>|<fw>|<commit>|<phy>`。PHY 版本自己带空格，所以它只能在最后
-    一格并整段留下。老固件是空格分隔、没有 HEAD 时间那一格——两种形都认，但**缺了 fw 那一格
+    固件现形（`firmware/src/proto/commands.c`）是竖线分隔的最多八段：
+    `widscan58|<target>|<proto>|<fw>|<commit>|<phy>|<mac>|<uptime_ms>`。
+    PHY 版本自己带空格但不含 |，所以 phy/mac/uptime 按序拆分。
+    MAC 是可选第 7 段（2026-11+ 固件），uptime_ms 是可选第 8 段（V1.1.2+）。
+    uptime_ms 是设备启动到现在的毫秒数，Agent 用它检测设备重启来生成 device_boot_id。
+    老固件是空格分隔、没有 HEAD 时间那一格——两种形都认，但**缺了 fw 那一格
     一律不认**：身份里唯一不能少的就是它。
     """
     text = line.strip()
@@ -184,7 +187,7 @@ def parse_info_line(line: str) -> dict | None:
     if not text:
         return None
     if "|" in text:
-        parts = text.split("|", 5)
+        parts = text.split("|", 7)  # 最多 8 段：magic + 5 固定 + mac + uptime
     else:
         parts = text.split(None, 4)
     if parts[0] != INFO_MAGIC or len(parts) < 4:
@@ -192,10 +195,15 @@ def parse_info_line(line: str) -> dict | None:
     fw = _segment(parts[3])
     if fw is None:
         return None
-    # 竖线形有 HEAD 时间那一格，空格形没有：老固件的第 5 段是 PHY，不是 commit。
+    # 竖线形有 HEAD 时间 + MAC + uptime；空格形老固件只有 target|proto|fw|phy
+    mac: str | None = None
+    uptime_ms: int | None = None
     if len(parts) > 4 and "|" in text:
         commit = _segment(parts[4])
         phy = _segment(parts[5]) if len(parts) > 5 else None
+        mac = _segment(parts[6]) if len(parts) > 6 else None
+        if len(parts) > 7 and parts[7].isdigit():
+            uptime_ms = int(parts[7])
     else:
         commit = None
         phy = _segment(parts[4]) if len(parts) > 4 else None
@@ -205,6 +213,8 @@ def parse_info_line(line: str) -> dict | None:
         "fw_version": fw,
         "commit_time": commit,
         "phy_version": phy,
+        "mac": mac,           # 可选：eFuse MAC 稳定硬件身份
+        "uptime_ms": uptime_ms,  # 可选：设备启动周期检测用
     }
 
 

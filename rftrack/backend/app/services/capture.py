@@ -1058,8 +1058,9 @@ class CapturePipeline:
                     session.add(record)
                     written.append(record)
                 for entry in job.identities:
-                    # 只写 `node` 上**今天就有**的那两列：target / commit / PHY 要等
-                    # `008_node_identity` 给出列再落——阶段 2 的定义是零迁移。
+                    # 板子报了什么就落什么，并留下"这是设备自己说的"。`identity_target` /
+                    # `commit_time` / `phy_version` 是端点表永远给不出的三件事，只有 INFO 行里有；
+                    # 反过来这里一个字都不从人工声明推导——来源写错，排查时就是错的那一条线索。
                     hit = session.execute(
                         update(Node)
                         .where(
@@ -1067,8 +1068,12 @@ class CapturePipeline:
                             Node.transport_addr == entry["transport_addr"],
                         )
                         .values(
+                            identity_source="info_line",
+                            identity_target=entry["identity"]["target"],
                             fw_version=entry["identity"]["fw_version"],
                             protocol_version=entry["identity"]["protocol_version"],
+                            commit_time=entry["identity"]["commit_time"],
+                            phy_version=entry["identity"]["phy_version"],
                         )
                     )
                     # 一行都没碰上（节点行还没被 `reconcile` 建出来）就不算写成：`settle` 会把

@@ -193,7 +193,25 @@ class Gateway(Base):
 
 
 class Node(Base):
-    """节点身份的全局唯一键是 (gateway_id, transport_addr)，禁止按显示名全局去重。"""
+    """**节点 = 一块会自己说话的设备**，是设备身份的唯一载体。
+
+    全局唯一键是 `(gateway_id, transport_addr)`，禁止按显示名全局去重。三层角色不许因为
+    物理部署合并而混起来（P0 决策 2）：
+
+    - **Node**（这一行）：被测量、被归属的设备本身。它有独立的 `node_id`、自己的固件/协议
+      身份（`fw_version` 及以下七列）、自己的启动会话（`boot_id`）。拔掉它，行留下来。
+    - **Gateway**：设备的**接入与管理边界**——一台跑 `serve.mjs` 的机器，回答"这块板从哪条
+      物理链路进来"。它是准入的载体，不是设备身份。
+    - **Relay**：**网络中继与数据传输角色**——一个物理位置（看台/起点塔），回答"数据往哪儿
+      走、归属算在哪"。它承载管理与归属，不承载连接。
+
+    三者可以在同一台树莓派上合并部署，但那是拓扑，不是数据模型：`Node.gateway_id` 与
+    `Gateway.relay_id` 是两个独立的外键，把 Gateway 当 Relay 用（或反过来）会让"换了台接入机"
+    与"换了个场地"在库里长成同一件事。
+
+    新列一律追加在末尾、顺序与 `alembic/versions/007_node_identity.py` 一字不差：
+    `create_all + stamp` 与 `upgrade head` 两条建库路径的列序必须一致。
+    """
 
     __tablename__ = "node"
     __table_args__ = (
@@ -216,6 +234,27 @@ class Node(Base):
     last_seen: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     #: ②a 端点会停掉该接入机的 RotorHazard 计时，这是能力位而不是实现细节（R21）。
     stops_rh: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # --- 007_node_identity：设备身份 + 启动会话 --------------------------------
+    #: 上面那两个版本数是**谁说的**：`info_line` = 板子自己报的，`manual` = 操作员手打的，
+    #: NULL = 还没人说过。光看 `fw_version` 分不出"半年前手填的"和"刚才板子报的"，
+    #: 而这两个的可信度差一个量级。
+    identity_source: Mapped[str | None] = mapped_column(String(16))
+    #: `INFO` 第二段的编译目标（`esp32-c5` 等）。它是"这块板是什么型号"，不是显示名。
+    identity_target: Mapped[str | None] = mapped_column(String(48))
+    #: `INFO` 第五段的固件 HEAD 时间，**原样存串**不做时间解析：固件给的是构建时间戳文本
+    #: （可能为空），把它转成 DateTime 就等于替设备编造一个它没说过的时刻。
+    commit_time: Mapped[str | None] = mapped_column(String(32))
+    #: PHY 版本，自带空格（固件注释明说了），所以只能整段留在最后一格。
+    phy_version: Mapped[str | None] = mapped_column(String(64))
+    #: 一次上电会话的身份。协议 v1 没有 `CLOCK?`，所以它由软件的重启判定派生（C-4），
+    #: 在会话派生落地之前一律 NULL——留 NULL 就是"还不知道这是第几次上电"。
+    boot_id: Mapped[str | None] = mapped_column(String(36))
+    boot_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    #: `unsynced` / `synced` / `restart_detected`。默认值是**一句事实陈述**（这台没做过时间
+    #: 同步），不是"缺数据"的遮羞布，所以它是七列里唯一配得上 NOT NULL + 默认的一列。
+    time_sync_quality: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default=text("'unsynced'"), default="unsynced"
+    )
 
     gateway: Mapped[Gateway] = relationship(back_populates="nodes")
 

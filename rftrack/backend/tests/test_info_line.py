@@ -210,3 +210,85 @@ def test_a_malformed_info_line_is_counted_as_unparsed_not_as_a_version(client, c
 
     assert node_row(client, chain["node_id"]) == (None, None)
     assert pipeline.text_lines == 1
+
+
+# --- `identity_source`：这个数是谁说的 ---------------------------------------
+
+#: 人工 `PUT` 与设备 `INFO` 都会填 `fw_version`，光看值分不出来。`identity_source` 那一格
+#: 记的就是"这一行的版本是谁说的"——手打的会过期，板子不会。
+INFO_FULL = {
+    "identity_source": "info_line",
+    "identity_target": "esp32-c5",
+    "commit_time": "2026-11-01T02:03:04Z",
+    "phy_version": "ESP32-C5 SPH 8.1.2",
+    "fw_version": "0.6.0",
+    "protocol_version": 1,
+}
+
+
+def identity_row(client, node_id) -> dict:
+    with client.app.state.db.scope() as session:
+        node = session.get(Node, node_id)
+        session.refresh(node)
+        return {
+            "identity_source": node.identity_source,
+            "identity_target": node.identity_target,
+            "commit_time": node.commit_time,
+            "phy_version": node.phy_version,
+            "fw_version": node.fw_version,
+            "protocol_version": node.protocol_version,
+        }
+
+
+def feed_info(client, chain, line: str = INFO_CURRENT):
+    pipeline = make_pipeline(client)
+    pipeline.feed(
+        chain["gateway_id"], chain["ep"], f"{line}\n".encode(), transport_addr=chain["addr"]
+    )
+    pipeline.drain_all()
+    pipeline.tick()
+    return pipeline
+
+
+def test_an_info_line_records_that_the_device_said_it(client, chain):
+    feed_info(client, chain)
+    assert identity_row(client, chain["node_id"]) == INFO_FULL
+
+
+def test_a_hand_typed_declaration_is_marked_as_hand_typed(client, chain):
+    client.put(
+        f"/api/nodes/{chain['node_id']}", json={"fw_version": "0.4.0", "protocol_version": 1}
+    )
+    row = identity_row(client, chain["node_id"])
+    assert row["identity_source"] == "manual"
+    assert row["fw_version"] == "0.4.0"
+    #: 人工那一格填不出 target/commit/phy——端点表与 `PUT` 都没有这些事实，留 NULL 不补空串。
+    assert (row["identity_target"], row["commit_time"], row["phy_version"]) == (None,) * 3
+
+
+def test_the_device_wins_over_what_someone_typed_in(client, chain):
+    """手打的版本串会过期，板子不会：INFO 一到就顶掉 `manual`，并留下新的来源。"""
+    client.put(f"/api/nodes/{chain['node_id']}", json={"fw_version": "0.4.0"})
+    feed_info(client, chain)
+
+    row = identity_row(client, chain["node_id"])
+    assert row["identity_source"] == "info_line"
+    assert row["fw_version"] == "0.6.0"
+
+
+def test_the_read_api_exposes_where_the_identity_came_from(client, chain):
+    feed_info(client, chain)
+    out = client.get(f"/api/nodes/{chain['node_id']}").json()
+    assert out["identity_source"] == "info_line"
+    assert out["identity_target"] == "esp32-c5"
+    assert out["phy_version"] == "ESP32-C5 SPH 8.1.2"
+    assert out["time_sync_quality"] == "unsynced"
+
+
+
+def test_a_capabilities_only_declaration_leaves_the_devices_claim_alone(client, chain):
+    """只声明能力的那次 PUT 里**没有"版本"这件事**，把来源翻成 `manual` 就是替操作员
+    指认"这个版本号是我打的"——他没说过。"""
+    feed_info(client, chain)
+    client.put(f"/api/nodes/{chain['node_id']}", json={"capabilities": {"rawiq": True}})
+    assert identity_row(client, chain["node_id"])["identity_source"] == "info_line"

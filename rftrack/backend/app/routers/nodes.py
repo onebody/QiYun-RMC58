@@ -43,6 +43,11 @@ def as_out(node: Node, relay_id: int, site_id: int) -> NodeOut:
         declaration_error=declaration_error,
         fw_version=node.fw_version,
         protocol_version=node.protocol_version,
+        identity_source=node.identity_source,
+        identity_target=node.identity_target,
+        commit_time=node.commit_time,
+        phy_version=node.phy_version,
+        time_sync_quality=node.time_sync_quality,
         status=node.status,
         last_seen=node.last_seen,
         stops_rh=stops_rotorhazard(node.transport_kind, node.stops_rh),
@@ -76,11 +81,14 @@ def read_node(node_id: int, session: Session = Depends(get_session)) -> NodeOut:
 def declare_node(
     node_id: int, body: NodeDeclaration, session: Session = Depends(require_writable_session)
 ) -> NodeOut:
-    """能力/版本 = 操作员声明，唯一写入口。
+    """能力/版本 = 操作员声明。
 
-    `reconcile()`（services/ingest.py:85）从不碰这三列，所以这一行不会被下一轮端点
+    `reconcile()`（services/ingest.py:90）从不碰这几列，所以这一行不会被下一轮端点
     对账冲掉；反过来，这里也**一个字都不从帧或端点表取**——按帧回填是 spec §1 明确
     否决过的形态：帧里没有"这块板能不能发 RAWIQ"这种事实，只有它今天发了什么。
+
+    只有真的声明了版本才改 `identity_source`：光改能力的那一次 PUT 里没有版本这件事，
+    把来源从 `info_line` 翻成 `manual` 就等于指认"这个版本号是人打的"，而它不是。
     """
     node = get_or_404(session, Node, node_id, "node")
     if body.capabilities is not None:
@@ -89,6 +97,8 @@ def declare_node(
         node.fw_version = body.fw_version
     if body.protocol_version is not None:
         node.protocol_version = body.protocol_version
+    if body.fw_version is not None or body.protocol_version is not None:
+        node.identity_source = "manual"
     flush_or_conflict(session, "node_declaration")
     row = session.execute(_query().where(Node.node_id == node_id)).first()
     return as_out(*row)
