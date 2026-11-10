@@ -1,0 +1,196 @@
+{
+ "url": "http://localhost:5173/?sim",
+ "results": [
+  {
+   "name": "page exposes app hook",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "connected",
+   "ok": true,
+   "detail": "simulator"
+  },
+  {
+   "name": "profile loaded",
+   "ok": true,
+   "detail": "c5-race"
+  },
+  {
+   "name": "status loaded",
+   "ok": true,
+   "detail": "{\"enabled\":255,\"hops\":4,\"gain\":45,\"mode\":\"GROUP\"}"
+  },
+  {
+   "name": "all channels updating",
+   "ok": true,
+   "detail": "8/8, rates ,,,,,,,"
+  },
+  {
+   "name": "spectrum segments",
+   "ok": true,
+   "detail": "4"
+  },
+  {
+   "name": "telemetry",
+   "ok": true,
+   "detail": "{\"rot\":50.174,\"hop\":4700,\"drops\":0}"
+  },
+  {
+   "name": "no CRC errors",
+   "ok": true,
+   "detail": "{\"bytes\":206824,\"crcErrors\":0,\"resyncBytes\":0,\"frames\":{\"1\":1216,\"2\":304,\"3\":24}}"
+  },
+  {
+   "name": "ENABLE 15 -> 2 pair hops",
+   "ok": true,
+   "detail": "{\"enabled\":15,\"hops\":2,\"gain\":45,\"mode\":\"GROUP\"}"
+  },
+  {
+   "name": "MODE SINGLE -> 4 hops",
+   "ok": true,
+   "detail": "{\"enabled\":15,\"hops\":4,\"gain\":45,\"mode\":\"SINGLE\"}"
+  },
+  {
+   "name": "restore + GAIN MANUAL 40",
+   "ok": true,
+   "detail": "{\"enabled\":255,\"hops\":4,\"gain\":40,\"mode\":\"GROUP\"}"
+  },
+  {
+   "name": "METRICS SNR -> levels frames",
+   "ok": true,
+   "detail": "{\"status\":\"SNR\",\"mode\":\"SNR\",\"rssi\":-35.25,\"snr\":23.25,\"ema\":null,\"center\":null}"
+  },
+  {
+   "name": "METRICS RSSI -> levels frames",
+   "ok": true,
+   "detail": "{\"status\":\"RSSI\",\"mode\":\"RSSI\",\"rssi\":-35.75,\"snr\":null,\"ema\":null,\"center\":null}"
+  },
+  {
+   "name": "Lap timer mode polls all seats",
+   "ok": true,
+   "detail": "{\"mode\":\"timer\",\"rhLink\":true,\"running\":true,\"error\":null,\"seatsOn\":8,\"withLevel\":8,\"passes\":7,\"link\":{\"reads\":2031,\"writes\":980,\"errors\":0},\"cycleMs\":78,\"pageShown\":true}"
+  },
+  {
+   "name": "Lap timer link without failed reads",
+   "ok": true,
+   "detail": "{\"reads\":2031,\"writes\":980,\"errors\":0}"
+  },
+  {
+   "name": "Lap timer passes detected",
+   "ok": true,
+   "detail": "7 passes"
+  },
+  {
+   "name": "EnterAt edit reaches the seat",
+   "ok": true,
+   "detail": "seat 1 enter 201"
+  },
+  {
+   "name": "PROTOCOL MONITOR applies METRICS FULL",
+   "ok": true,
+   "detail": "FULL"
+  },
+  {
+   "name": "PROTOCOL RH applies the saved settings",
+   "ok": true,
+   "detail": "{\"nfft\":256,\"capn\":1024,\"metrics\":\"SNR\",\"page\":\"SNR\",\"filter\":\"EMA\"}"
+  },
+  {
+   "name": "Reset applies the built-in defaults",
+   "ok": true,
+   "detail": "{\"nfft\":64,\"capn\":256,\"metrics\":\"RSSI\",\"page\":\"RSSI\",\"mode\":\"GROUP\",\"filter\":\"MEDIAN\",\"gain\":45}"
+  },
+  {
+   "name": "back to monitor mode",
+   "ok": true,
+   "detail": "protocol MONITOR, 8/8 channels"
+  },
+  {
+   "name": "monitor mode resumes after REBOOT",
+   "ok": true,
+   "detail": "{\"proto\":\"MONITOR\",\"fresh\":8}"
+  },
+  {
+   "name": "tile click selects channel",
+   "ok": true,
+   "detail": "selected 5"
+  },
+  {
+   "name": "raw I/Q capture",
+   "ok": true,
+   "detail": "{\"n\":8192,\"lo\":5825000}"
+  },
+  {
+   "name": "raw I/Q sizes respect rawiq_max",
+   "ok": true,
+   "detail": "{\"max\":16380,\"n\":4,\"bad\":[]}"
+  },
+  {
+   "name": "no command errors",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "no console errors",
+   "ok": true,
+   "detail": ""
+  },
+  {
+   "name": "no horizontal scroll at 390px",
+   "ok": true,
+   "detail": "overflow 0px"
+  }
+ ],
+ "final": {
+  "connected": true,
+  "profile": "c5-race",
+  "nch": 8,
+  "status": {
+   "enabled": 255,
+   "hops": 4,
+   "gain": 60,
+   "mode": "GROUP"
+  },
+  "telemetry": {
+   "rot": 50.193,
+   "hop": 4700,
+   "drops": 0
+  },
+  "channelsWithData": 8,
+  "rates": [
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null,
+   null
+  ],
+  "segments": 4,
+  "spurs": [
+   5600000,
+   5712000,
+   5760000,
+   5920000
+  ],
+  "stats": {
+   "bytes": 484993,
+   "crcErrors": 0,
+   "resyncBytes": 0,
+   "frames": {
+    "1": 5756,
+    "2": 1605,
+    "3": 125,
+    "4": 8,
+    "6": 664
+   }
+  },
+  "errors": [],
+  "rawiq": {
+   "n": 8192,
+   "lo": 5825000
+  }
+ }
+}

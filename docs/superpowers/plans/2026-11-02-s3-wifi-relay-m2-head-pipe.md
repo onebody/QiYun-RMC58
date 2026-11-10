@@ -1741,6 +1741,41 @@ cd repo && git add docs && git commit -m "docs(relay): M2 execution record - gat
 
 L5 用真录制时注意既有口径：`services/replay.py` 现在按 `SOURCE="mock"` 硬拒真录制——要么走 `frame_parser` 直接吃字节（对拍脚本自己做，别改 replay 的口径），要么显式翻案并记账。
 
+#### Task 14 执行实况（2026-11-02 晚，飞线已接好，L1.5 / L4 / L5 已跑）
+
+现场前提与计划的两处差异，先记下来：后端跑在 **9020**（9000 已被无关容器占住，不是本项目的演示环境），页面与脚本都经 `/ws/bridge/node%3As3-relay?gateway=1` 进；桥仍是 8011。两侧板子都是本轮最新构建（C5 `[env:esp32c5-head]`、S3 `[env:esp32s3-relay]`）。
+
+- **L1.5 STA 失败原因可见：过**。`NET STATUS` 现在能自己说清为什么：起不来时
+  `"why":"wifi_init ESP_ERR_NO_MEM heap=27984/9216","sta_reason":0,"sta_downs":0,"ip4":"<none>","dhcp":"init"`；
+  正常时 `"why":"up","ip4":"192.168.*.*","dhcp":"started","sta_reason":0,"sta_downs":0`。
+  M1 遗留的 `sta:false / why:""` 就此结案——**且这条 readout 当场抓到一个真 bug**：`ESP_ERR_NO_MEM` + 最小块 9,216 是中继的 `link_sink_start()` 在**内部 RAM** 里照抄扫描节点的 32 KiB 队列把堆挤爆了（中继的 USB sink 根本不承载帧）。修法见 §3「中继的内部 RAM 配额」。
+- **L4 命令回环：过**。回环脚本按计划现写在 `/tmp/w58-probe/m2_holder.py`（`rt` 模式：自己就是持有那条会话的客户端，命令以**二进制帧**发出——`ws_bridge` 会丢文本帧，发文本等于没发）。五条各跑 5 次取最大，全部 ≪500 ms 且都落回**同一条** WS，全程无 `ERR head_down`：
+
+  ```
+  worst_ms {"HEAD": 11, "HEAD PROTOCOL?": 54, "HEAD GAIN MANUAL 30": 57, "HEAD SCAN START": 60, "HEAD PROTOCOL MONITOR": 68}
+  ```
+
+  取证坑（**下次别再照着行锚定判**）：中继上行是 1024 字节的 UART 读块，ASCII 应答会被拼进字节流的**任意偏移**，前一字节常常不是 `\n`；用 `\n` 锚定的 token 第一轮全 `RT_MS=None`，差点误判成"下行不通"（中间还绕了一段去查桥的下发，白跑）。改成足够长的去锚字面量，并用同脚本的 `noise` 模式**在同一条活跃流上实测假阳性**：30 s / 1,113,000 B 里 `OK\n` 出现 **0** 次 ⇒ 命令后紧跟的 `OK` 匹配算证据。每次匹配的上下文形如 `…OK\n\xa5R\x01\x01V\x00…`——`OK` 前是上一帧的尾字节，其后是下一帧的帧头，正是"命令回声混在帧流里"应有的形状。
+- **L5 帧对拍：过**。①USB 用 `/tmp/w58-probe/m2_usb_record.py`（C5 自己的 USB，115200，先发 `PROTOCOL MONITOR\n` 再 `reset_input_buffer()` 把应答丢掉，别让它进录制），录 60 s = 2,240,512 B；③Wi-Fi 用 `m2_holder.py capture` 录 60 s = 2,224,128 B。两份字节过**同一个** `app.services.frame_parser.FrameStream`（1024 B 一次 push，与中继的切块一致）：
+
+  | 字段 | ① USB | ③ Wi-Fi |
+  |---|---|---|
+  | 帧数 | 17,627 | 17,499 |
+  | 类型 | METRICS 14,515 / SPECTRUM 2,903 / TELEMETRY 242 | METRICS 14,410 / SPECTRUM 2,881 / TELEMETRY 240 |
+  | METRICS:SPECTRUM | 4.9993 | 5.0014 |
+  | mode / channels / gain / hops | FULL / 2 / 30 / 4（14,515 帧全部） | FULL / 2 / 30 / 4（14,410 帧全部） |
+  | `crc_errors` | **0** | **0** |
+  | `resync_bytes` | 35 | 193 |
+  | 序号 | 300,235–314,749 连续，`seq_gaps=0` | 319,550–333,959 连续，`seq_gaps=0` |
+  | rssi 取值集合 | 1,186 个不同值，−62.45 … −21.72 | 1,217 个不同值，−62.88 … −21.27 |
+  | snr 取值集合 | 922 个不同值，−8.32 … 35.50 | 995 个不同值，−7.48 … 32.79 |
+  | text_lines | 无 | 无 |
+
+  结构逐字段相同，只有序号/时间戳区间不同（本就是两段独立的 60 s 窗口）、`rssi/snr` 集合略有出入（不同窗口的射频起伏，不是传输造成的）、`resync_bytes` 只有首尾半截帧的量级差（35 vs 193，都 <0.01%）。**RAWIQ 只出现在 ①**：③ 上发 `HEAD RAWIQ 5800000 4096 1` 得到 `ERR uart_port`——即 `commands.c:605` 那个 `sink == LINK_USB` 的门在替把关，不需要新增代码。
+  顺带定性的两条现场事实，以后切换形态要用得上：
+  1. **帧出口跟随命令来源端口**（`PROTOCOL MONITOR` 在哪条路上发，`link_set_frame_sink()` 就把帧指到哪）⇒ ①↔③ 互换不用重烧，只在想接的那条路上发一行。
+  2. 往活跃管道里注入 ASCII 应答会把一行拼进帧流中间。后端累计的 `crc_errors: 9 / resync_bytes: 3132 / text_lines: 52` **全部**归因于本轮 L4/L5 的命令注入——这正是 L2 静置窗口内**一条命令都不发**的理由。
+
 ---
 
 ## 3. 收尾实况（执行时填）
@@ -1749,5 +1784,6 @@ L5 用真录制时注意既有口径：`services/replay.py` 现在按 `SOURCE="m
 - **四 env 体积账**：`esp32s3` 565,024→**565,136（+112）**、`esp32c5` 687,680→**687,792（+112）**、`esp32c5-head` **687,792**（新）、`esp32s3-relay` 695,344→**709,456（+14,112）**。基线在 `02afed9` 的干净 worktree 重编取得；归因见 Task 12 的执行期实测表——两扫描 env 的 +112 全由 `line_pace.h` 内联（`handle`/`scanner_task`）与 `uart_link` 两个 7 B 常量解释；relay 的 14 KB 里 **12,194 B 是 UART 驱动首次进链接**，管道与命令面合计约 1.5 KB，另 1,024 B `chunk` 只占 RAM。
 - **L1 假中继**：`{sent: 2,215,611, chunks: 2,164, frames: 17,464, crc_errors: 0, resync_bytes: 0, text_lines: 1, dropped: 0}`；`skipped={spectrum: 2,871, telemetry: 238}` 均为既有类型。离线整块/1024/7 三种切法结果逐字段相同。
 - **D1–D4 落地位置**：D1 `HEAD` 转发与裸命令仍由中继应答 → `firmware/src/proto/commands.c`（`9c6e42d`）；D2 `[env:esp32c5-head]` 921600、`[env:esp32c5]` 115200 不动 → `firmware/platformio.ini`（`ff2d5a2`）；D3 `NET UART <tx> <rx>` 运行时可配 + NVS → `commands.c`/`net_prefs.c`（`9c6e42d`）；D4 `sta_reason`/`sta_downs`/`why` → `ws_link.c`（`27fcc70`）。平台侧补 `capture.endpoint_stats`（`c6c46a7`）与 `PUT /api/nodes/{id}`（`f3aa018`）。
-- **真机四道门槛**：**未执行**——L2 飞线静置、L3 断网重连、L4 命令回环、L5 帧对拍逐条等 C5↔S3 飞线；L1.5（`sta_reason` 可见性）同样未在真机上验。L6 真机回退也**未执行**。⇒ M2 当前只能标「**已通过软件测试**」。
+- **中继的内部 RAM 配额**（真机逼出的修复，未提交）：`firmware/src/proto/link.c` 的队列尺寸原来是 `#if RX_TARGET_C5 … #else 72 KiB / 16 KiB`，中继 `esp32s3-relay` 落进 `#else`——那是**扫描节点**给 RAWIQ 突发准备的 USB 环（72 KiB）与 USB 驱动 TX 缓冲（16 KiB），而中继的 USB sink 只走 ASCII 应答，扫频头的字节走的是 `relay_pipe.c:48` 的 `link_raw_to(LINK_WS, …)`——直写 socket，根本不进那条环。这两块都在 `esp_wifi_init` **之前**吃掉内部 DRAM。板上证得：按 72 KiB 建完后 `free 27,984 / largest block 9,216`，`esp_wifi_init` 直接 `ESP_ERR_NO_MEM`。改法是插一段中继专属分支（`#elif RX_WIFI_RELAY` → `LINK_QUEUE_BYTES (4 * 1024)`、`LINK_USB_TX_BYTES 4096`，注释写明"dead weight in the one place the relay cannot afford it: internal RAM, before esp_wifi_init"），并让 `relay_pipe.c:26-30` 的切块注释与实测对上。**同批未提交**：`main.c` 的 boot 期堆探针、`ws_link.c` 的 `join_failed(step, err)` 逐步记因（`netif_init`/`netif_sta`/`wifi_init`/`storage`/`set_config`/`set_mode`/`start`/`set_ps`/`connect`）与 `NET STATUS` 新增的 `ip4`/`dhcp` 两键、`platformio.ini` 的 native include dirs。⇒ 这几条要等 L2/L3 收口后一并提交，提交号届时回填。
+- **真机门槛（2026-11-02 晚，执行实况见 Task 14 末节）**：**L1.5、L4、L5 已过**——L4 五条命令 ×5 次最大 68 ms（假阳性基线 0 次 / 30 s / 1.11 MB），L5 两份 60 s 录制过同一 `frame_parser` 逐字段一致且 `crc_errors=0`、RAWIQ 在 ③ 被既有门拒成 `ERR uart_port`，L1.5 的 `why`/`sta_reason`/`ip4`/`dhcp` 给得出因果并当场抓出中继的堆分配 bug。**L2 飞线静置**：30 min 窗口正在跑（`/tmp/w58-probe/m2_holder.py hold`，实测 36.2 KiB/s，T0 快照在 `/tmp/w58-probe/m2-l2-t0.json`），窗口内零命令，判据（`endpoint_stats[node:s3-relay]` 的 `crc_errors`/`resync_bytes` 增量 0 + `NET STATUS` 的 `out_drops`/`queue_permille`）待窗口收口回填。**L3 断网重连**：**未执行**——要人手把路由器断电 60 s，本轮没占用那个动作。**L6 真机回退**：**未执行**。⇒ M2 现在可以标「**软件三门槛 + 真机 L1.5/L4/L5 已过**；长跑静置在跑、断网重连与回退未做」。
 - **推送**：未执行（等用户明确要求；只推 `fork`，`origin` 永不推）。

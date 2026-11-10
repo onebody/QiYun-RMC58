@@ -20,7 +20,11 @@
 
 固件那条如实标注未复跑：P0 承诺 `firmware/` 一行不碰（§7 可验证为 `git diff --stat HEAD -- firmware web serve.mjs` 除白名单文件外为空），所以不复跑不构成验收缺口；但阶段 2 一旦需要动 `web/`，本行必须补测。
 
-**阶段 2 出口（2026-11-03 实测，作为阶段 3 的"只增不减"起点）**：后端 **641 passed / 1 skipped**（85.5 s，+23 条 = `test_console_mount.py` 6 + `test_info_line.py` 17）；工作台 **214 / 0 fail**；真浏览器冒烟 **65 / 65**（51.1 s）；`web/` vitest **56 passed**。`web/` 与 `serve.mjs` 在本阶段零改动（`git status --short -- web serve.mjs` 为空），所以固件 native 那行仍未复跑、口径不变。
+**阶段 2 出口（2026-11-03，作为阶段 3 的"只增不减"起点）**：后端 **640 passed / 1 skipped（合计 641）**（85.5 s，+23 条 = `test_console_mount.py` 6 + `test_info_line.py` 17）；工作台 **214 / 0 fail**；真浏览器冒烟 **65 / 65**（51.1 s）；`web/` vitest **56 passed**。`web/` 与 `serve.mjs` 在本阶段零改动（`git status --short -- web serve.mjs` 为空），所以固件 native 那行仍未复跑、口径不变。
+
+> 订正一处：上一版这里写的是"641 passed / 1 skipped"，把 junit 的 `tests` 属性（合计数）当成了 passed。真实数字是合计 641、passed 640、skipped 1——在 `git archive HEAD` 的干净副本上重跑核过（该副本另有一条 `test_replay.py` 失败，原因是它依赖被 gitignore 的本地夹具目录，与代码无关）。
+
+**阶段 3.1 出口（2026-11-03 实测，作为阶段 3.2–3.4 的起点）**：后端 **649 passed / 1 skipped（合计 650）**，比阶段 2 出口 +9 条 = `test_node_identity.py` 5 + `test_info_line.py` 的 `identity_source` 四态 4；`test_migrations.py` 15 条原样绿（两条建库路径对拍是本迁移的回归线）。其余三门槛本轮未复跑（3.1 只动后端与迁移，未碰前端）。
 
 注：`python` 在本机不存在，只有 `python3`；`pytest -q` 在本机不打印汇总行时改用 `--junit-xml` 读属性。
 
@@ -33,7 +37,7 @@
 | # | 原 Console 功能 | 原实现证据（仓库相对路径） | 单机侧 `/app` | 平台侧 Site Monitoring 现状 | P0 处置 | 动固件 |
 |---|---|---|---|---|---|---|
 | 1 | USB Serial 连接 | [web/serial/device.ts](../../../web/src/serial/device.ts)、[web/src/main.ts:793](../../../web/src/main.ts#L793) `ws://<host>/serial?ep=`、一板一页锁 [web/serve.mjs:172](../../../web/serve.mjs#L172) | ✅ Web Serial 直连 + 桥透传两路 | 🟡 平台只有 `/ws/bridge/{ep}` 透传给 serve.mjs（[app/routers/ws.py:20](../../../rftrack/backend/app/routers/ws.py#L20)），`/app` 页面尚未由后端发出（[app/main.py:78](../../../rftrack/backend/app/main.py#L78) 只挂 `/workbench`） | 阶段 2 ✅：后端加 `/app` 静态挂载（可选件，缺失不算故障），Web Serial 直连路径**原样保留** | 否 |
-| 2 | 设备身份及固件信息 | INFO 行口径在 [web/src/model/store.ts:85-93](../../../web/src/model/store.ts#L85) `parseInfo`（`widscan58\|target\|proto\|fw\|commit\|phy`） | ✅ | ❌ 后端把文本行**只计数不解析**（[capture.py:626-627](../../../rftrack/backend/app/services/capture.py#L626) `piece.kind == "text"` → `self.text_lines += 1`），`Node.fw_version`/`protocol_version`（[models.py:212-214](../../../rftrack/backend/app/models.py#L212)）只有手工 `PUT /api/nodes/{id}` 会填 | 阶段 2 ✅：在 capture 的 text 分支解析 INFO（纯 ASCII 行，不改帧、不加命令），落 `Node.fw_version`/`protocol_version` 两列；target/commit/phy 三样等 `008_node_identity` 给列（阶段 4） | **否**（复用现有协议） |
+| 2 | 设备身份及固件信息 | INFO 行口径在 [web/src/model/store.ts:85-93](../../../web/src/model/store.ts#L85) `parseInfo`（`widscan58\|target\|proto\|fw\|commit\|phy`） | ✅ | ❌（阶段 1 快照，行号现已移动）后端把文本行**只计数不解析**（[capture.py:626-627](../../../rftrack/backend/app/services/capture.py#L626) `piece.kind == "text"` → `self.text_lines += 1`），`Node.fw_version`/`protocol_version`（[models.py:231](../../../rftrack/backend/app/models.py#L231)）只有手工 `PUT /api/nodes/{id}` 会填 | 阶段 2 ✅：在 capture 的 text 分支解析 INFO（纯 ASCII 行，不改帧、不加命令），落 `Node.fw_version`/`protocol_version` 两列；target/commit/phy 三样等 `007_node_identity` 给列；**阶段 3.1 ✅**：`007_node_identity` 落了身份四列 + 启动会话三列，INFO 全套入库并标 `identity_source='info_line'`，`PUT /api/nodes/{id}` 声明版本时标 `manual` | **否**（复用现有协议） |
 | 3 | 频道配置 | [views/channelPlanDialog.ts:29](../../../web/src/views/channelPlanDialog.ts#L29)、[model/channelPlan.ts:11-24](../../../web/src/model/channelPlan.ts#L11)（`BANDS`、`MAX_CHANNELS=8`） | ✅ 8 槽 + 混合频段 | ❌ **表有、API 无、UI 无**：`ChannelPlan`/`ChannelPlanItem` 存在于 [models.py:223/244](../../../rftrack/backend/app/models.py#L223)，但 `app/routers/` 与 `app/schemas.py` 全文无引用（本轮 grep 证实） | 阶段 4：`/api/channel-plans` **只读**（C-8 已裁定）；下发到板子留到方案 C 的会话写权落地后单独一轮 | 否 |
 | 4 | 扫描控制（START/STOP、MODE、GAIN） | [views/controls.ts:11](../../../web/src/views/controls.ts#L11) | ✅ | 🟡 平台只有桥级 `POST /api/board/mode`（scan\|rh，[app/routers/bridge.py:60](../../../rftrack/backend/app/routers/bridge.py#L60)），无节点级扫描控制 | 阶段 5：**只读态**（C-8 已裁定 P0 不做写侧）；下发 `START/STOP/MODE/GAIN` 留到方案 C 的 sticky 单写者落地后单独一轮，汇聚实例维持显式 405 | 否 |
 | 5 | GROUP 模式 | [views/controls.ts:72](../../../web/src/views/controls.ts#L72)、[model/channelPlan.ts:45/52/69](../../../web/src/model/channelPlan.ts#L45)、格子口径 [views/channelGrid.ts:137](../../../web/src/views/channelGrid.ts#L137) | ✅ | 🟡 上报侧已有：`_point()` 把帧的 `mode` 原样放进环（[capture.py:1199-1220](../../../rftrack/backend/app/services/capture.py#L1199)），但摘要表无 mode 列、工作台不显示 LO 分组 | 阶段 4：工作台读现成 `mode` 事实并显示；不新增采集字段 | 否 |
@@ -119,12 +123,12 @@
 
 ## 3. 数据库迁移清单
 
-现状：`alembic/versions/` 只有 `001_baseline … 006_targets`，`007` 起空闲。两份设计都认领过 007，**C-5 已裁定合并为一次迁移**（方案 C 的 `007_inline_relay` 号位作废，`relay_enrollment` 表不建）。
+现状：`007_node_identity` **已于阶段 3.1 落地**，`alembic/versions/` 为 `001_baseline … 007_node_identity`，`008` 起空闲。两份设计都认领过 007，**C-5 已裁定合并为一次迁移**（方案 C 的 `007_inline_relay` 号位作废，`relay_enrollment` 表不建）；**号位 = 执行顺序**，故身份迁移占 007、relay ingress 顺延 008（用户 2026-11-03 裁定）。
 
 | 迁移 | 内容 | 兼容性 | 对应决策 |
 |---|---|---|---|
-| `007_relay_ingress` | `gateway.wifi_key String(64) NULL` + 部分唯一索引；`gateway.kind` 加值 `wifi-relay`（裸 `String(16)` 无枚举约束，**零 DDL**，C-6）；`relay_denial` 留痕表；seed 一行内置接入机（幂等，判据三条）；**不建 `relay_enrollment`**（C-5） | 加列可空 + 只增行，旧行零影响 | 决策 2 |
-| `008_node_identity` | `node.boot_id String(36) NULL`、`node.boot_changed_at`、`node.time_sync_quality String(16) NOT NULL default 'unsynced'`；`(gateway_id, transport_addr)` 已是唯一键（[models.py:199](../../../rftrack/backend/app/models.py#L199)），不动 | 全可空/带默认，旧行填 `unsynced` | 决策 1（无 `CLOCK?` ⇒ 会话派生，C-4） |
+| `007_node_identity` | **已落地（阶段 3.1）**。`node` 追加七列，顺序即 `models.Node` 声明顺序：身份四列 `identity_source String(16) NULL`/`identity_target String(48) NULL`/`commit_time String(32) NULL`/`phy_version String(64) NULL` + 启动会话三列 `boot_id String(36) NULL`/`boot_changed_at NULL`/`time_sync_quality String(16) NOT NULL default 'unsynced'`；`(gateway_id, transport_addr)` 唯一键不动（[models.py:218](../../../rftrack/backend/app/models.py#L218)） | 七列全追加在末尾、旧行除 `unsynced` 外一律 `NULL`（不补造身份）；`up()` 按 `PRAGMA table_info` 跳过已有列所以 create_all 库也走得通；`down()` 只撤这七列 | 决策 1 + 2（身份来源可指认；无 `CLOCK?` ⇒ 会话派生，C-4） |
+| `008_relay_ingress` | `gateway.wifi_key String(64) NULL` + 部分唯一索引；`gateway.kind` 加值 `wifi-relay`（裸 `String(16)` 无枚举约束，**零 DDL**，C-6）；`relay_denial` 留痕表；seed 一行内置接入机（幂等，判据三条）；**不建 `relay_enrollment`**（C-5） | 加列可空 + 只增行，旧行零影响 | 决策 2 |
 | `009_summary_metrics` | `sample_summary` 加**七列** `REAL NULL`：决策 5 的 `floor_dbm`/`snr_db`/`peak_dbm` + C-7 裁定的 `centroid_off_hz`/`obw_lo_hz`/`obw_hi_hz`/`peak_off_hz`；`up()` 是七条 ADD COLUMN，`down()` 需要真身 | 旧行留 NULL，读侧必须容忍 NULL（不补 0，0 是合法 dBm） | 决策 5 + C-7 |
 | `010_spectrum_grid` | 新表 `spectrum_capture`：`(node_id, grid_start_khz, bin_khz, detector, t_node_ms, t_rx_ms, bins blob, bin_count, missing_prev, sync_quality)`；写入量口径：栅格后 ≈0.35 KB/s·节点（8 节点 ≈ 0.24 GB/天） | 新表，不动现有任何表 | 决策 4 + C-2 |
 | `011_site_plan` | 新表 `site_plan`（多版 + 激活标记 + 本地路径 + sha256）与 `node_position`（plan_id + node_id + x/y + 标定） | 新表 | 决策 3 |
@@ -169,8 +173,9 @@
 | 阶段 | 判据（可执行） | 回归证据 |
 |---|---|---|
 | 1 | 本文件 5 份清单齐、§6 每条冲突有用户答复 | `git status --porcelain` 除本文档与既有未跟踪文件外为空 |
-| 2 | `/app` 未配目录 → `mounted=false, reason=disabled` 且 `status` 仍 `ok`；配了 → `GET /app/` 200、两条相对资源 200、`health.console.index=true`。INFO 命中 → `Node.fw_version`/`protocol_version` 两列真值；同一份身份报三遍只写一次；畸形行不产生任何写入。**本阶段零迁移**，所以 `identity_source`、`target`、`commit_time`、`phy_version` 四样留给 `008_node_identity`（阶段 4） | 后端 ≥ 618（新增用例只增）；`test_frame_parity.py` 原样绿 |
-| 3 | 工作台显示两个工作区入口且当前工作区名可见于状态栏；`waterfall-lut.json` 双向对拍 256/256 逐字节相等 | 工作台 ≥ 214、`web/` vitest ≥ 56、冒烟 ≥ 65 |
+| 2 | `/app` 未配目录 → `mounted=false, reason=disabled` 且 `status` 仍 `ok`；配了 → `GET /app/` 200、两条相对资源 200、`health.console.index=true`。INFO 命中 → `Node.fw_version`/`protocol_version` 两列真值；同一份身份报三遍只写一次；畸形行不产生任何写入。**本阶段零迁移**，所以 `identity_source`、`target`、`commit_time`、`phy_version` 四样留给 `007_node_identity`（阶段 3.1） | 后端 ≥ 618（新增用例只增）；`test_frame_parity.py` 原样绿 |
+| 3 | **3.1 ✅（2026-11-03）**：`007_node_identity` 七列形状与两条建库路径对拍绿；旧行除 `unsynced` 外全 `NULL`；INFO 命中 → 身份四列真值 + `identity_source='info_line'`；人工 PUT 版本 → `manual`；设备报过之后人工再 PUT 不冒充设备说的；`GET /api/nodes/{id}` 出参含 `identity_source`/`identity_target`/`phy_version`/`time_sync_quality`。后端 649 passed / 1 skipped（合计 650，+9）。3.2–3.4 见下行 | 工作台 214 / `web/` 56 已复跑；真浏览器冒烟见 3.2 收尾 |
+| 3.2–3.4 | 工作台显示两个工作区入口且当前工作区名可见于状态栏；`waterfall-lut.json` 双向对拍 256/256 逐字节相等 | 工作台 ≥ 214、`web/` vitest ≥ 56、冒烟 ≥ 65 |
 | 4 | 七个新字段在旧行回 `null`（不补 0）；`/api/samples/summary` 出参含七字段；SPECTRUM 帧不再进 `skipped_seen`（栅格行数 > 0 且 skipped 增量只含 rawiq/telemetry/log）；350-bin blob 解回逐 bin 等于帧内同 detector 最大值；`mode=per_node` 与 `mode=max` 各出一条真数据曲线，`median`/`avg_power` 回 422 | 五门槛 + `test_migrations.py` 覆盖 007→011 前后向 |
 | 5 | 未登记 key 拨入：连接被 close、`relay_denial` 有行、**`gateway` 表零新增**；已登记重拨：不重复建行；登记幂等：第二次 409 `wifi_key_exists`；候选列表不认领就不进 `node` | `test_hierarchy_crud.py`/`test_multi_gateway.py` 原样绿（`max_nodes_per_gateway=8`、`max_gateways=8` 硬闸不许放宽） |
 | 6 | 上传非图片 → 4xx 且不落盘；超尺寸 → 4xx；激活第二版后第一版文件仍在盘上；`GET .../image` 回原字节且 sha256 与库一致；点位在激活版换图后仍可读并标记"参照版本" | 新增 `test_site_plan.py` ≥ 6 条 |
@@ -190,7 +195,7 @@
 | **C-2 决策 4 vs 栅格排期** | 决策 4 把 PER_NODE/MAX 放进 P0，设计文档 §8 把频谱数据面排在 P3 / `010_spectrum` | **栅格提前进 P0 阶段 4**：`010_spectrum_grid` + 丢弃分支拆分 + `spectrum-band.js`，`median`/`avg_power` 显式 422 | §2 阶段 4、§3 `010`、§4 第 12/13 条 |
 | **C-3 列名** | 决策 5 写 `floor_dbm`/`snr_db`/`peak_dbm`，设计文档写 `floor_db`/`snr_db`/`peak_db` | 以用户命名为准（`floor_dbm`/`snr_db`/`peak_dbm`），设计文档回改 | §3 `009`、§4 第 11 条 |
 | **C-4 无固件命令 × boot_id** | 决策 1 不新增 `DEVICE?`/`CLOCK?`，决策 2 又要节点保留 `boot_id` | `boot_id` 由**后端连接会话派生**（每次 `/node` 会话一个 UUID），跨节点时间对齐长期 `unsynced`；退化路径 `restart_detected`（seq 归零 + t_ms 倒退）升为默认路径。这是本期**能力上限**而非缺陷，PER_NODE 图必须带"不可比"标签 | §3 `008`、§5 阶段 7 判据 |
-| **C-5 迁移号位与准入表** | 方案 C 设计 §1.2 建 `relay_enrollment` + `relay_denial`，占 `007_inline_relay`；决策 2 定 Gateway 行本身作准入载体 | **`007_relay_ingress` 只含 `wifi_key` + `relay_denial` + 幂等 seed，不建 `relay_enrollment`**；方案 C 文档 §1.1/§1.2/§4.2-10 同批改写。理由：两张表表达同一件事会把"发现即入库"从节点层搬回接入机层，违背 R-3 | §3 `007`、§5 阶段 5 判据 |
+| **C-5 迁移号位与准入表** | 方案 C 设计 §1.2 建 `relay_enrollment` + `relay_denial`，占 `007_inline_relay`；决策 2 定 Gateway 行本身作准入载体 | **`008_relay_ingress`（原记 007，因号位=执行顺序、身份迁移先落而顺延）只含 `wifi_key` + `relay_denial` + 幂等 seed，不建 `relay_enrollment`**；方案 C 文档 §1.1/§1.2/§4.2-10 同批改写。理由：两张表表达同一件事会把"发现即入库"从节点层搬回接入机层，违背 R-3 | §3 `008`、§5 阶段 5 判据 |
 | **C-6 `kind` 取值** | 方案 C 写 `kind="inline"`；R-2/决策 2 写 `Gateway.kind="wifi-relay"` | 统一 `wifi-relay`，URL 前缀 `relay://<key>`，`inline` 作为废弃词全文清除 | §2 阶段 4、§3 `007` |
 | **C-7 "完整恢复"的边界** | §二 要 18 项逐项映射，但 #11/#16/#17/#18 面板本质是单机侧能力 | **按 A 验收**：恢复 = `/app` 单机侧 18 项全可手测 + 平台侧不删任何能力；#9/#10 的 `centroid_off_hz`/`obw_lo_hz`/`obw_hi_hz`/`peak_off_hz` **随三列一并出列**（同一 `_point()` 通路）；#11/#16/#17 与 #18 的计圈面板平台侧显式不做 | §1 表 #9/#10、§3 `009`、§5 阶段 4 |
 | **C-8 频道配置与控制下发** | #3/#4 平台侧"表有 API 无 / 无写面"，写侧要先有 sticky 单写者 | **P0 只做读侧**：候选/身份/频道计划可读，节点级 `START/STOP/MODE/GAIN` 下发留到方案 C 落地后单独一轮 | §4 第 18/19 条、§1 表 #3/#4 |
