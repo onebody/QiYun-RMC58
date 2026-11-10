@@ -1,0 +1,18 @@
+# RF Track 后端依赖（钉版，与 Pi 上 Python 3.13 / Mac 上 3.14 都验过可装）
+# 安装：python3 -m pip install -r rftrack/requirements.txt
+
+fastapi==0.133.1
+uvicorn==0.41.0
+SQLAlchemy==2.0.47
+alembic==1.18.4
+# probe 拨 serve.mjs 的 /api/endpoints 走它；TestClient 也依赖它
+httpx==0.28.1
+# /ws/bridge/{ep} 连 serve.mjs 的 /serial?ep= 走它（uvicorn 侧的 ws 协议实现也是同一套）
+websockets==16.0
+# POST /api/import/site-package 的 UploadFile 靠它解析 multipart；缺了它在**导入路由注册的
+# 那一刻**就抛 RuntimeError，本机装了别的项目的 multipart 所以测试全绿、钉版环境直接起不来
+# （2026-10-31 Docker 首跑实测）。
+python-multipart==0.0.22
+
+# 测试
+pytest==8.4.2

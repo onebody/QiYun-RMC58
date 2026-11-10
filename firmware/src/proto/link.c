@@ -11,12 +11,27 @@
 #include "frames.h"
 #include "link.h"
 #include "uart_link.h"
+#if RX_WIFI_RELAY
+#include "ws_link.h"
+#endif
+#ifdef RX_W5500
+#include "eth_server.h"
+#endif
 
 #if RX_TARGET_C5
 /* The C5 heap is ~125 KB once the 128 KiB capture bank is reserved, and Wi-Fi
  * needs much of what's left. RAWIQ goes out in chunks, so the queue only has
  * to hold a reply (3 KB) and ride out short host stalls. */
 #define LINK_QUEUE_BYTES (16 * 1024)
+#define LINK_USB_TX_BYTES 4096
+#elif RX_WIFI_RELAY
+/* A relay never puts a frame on its USB sink - that is the head's bytes going
+ * out LINK_WS, and what USB carries here is an ASCII reply. So the scanner's
+ * 72 KiB burst queue is dead weight, and it is dead weight in the one place the
+ * relay cannot afford it: internal RAM, before esp_wifi_init. Measured on the
+ * board with these two back (2026-11-02): free 27,984, largest block 9,216,
+ * esp_wifi_init ESP_ERR_NO_MEM, and NET STATUS saying so. */
+#define LINK_QUEUE_BYTES (4 * 1024)
 #define LINK_USB_TX_BYTES 4096
 #else
 #define LINK_QUEUE_BYTES (72 * 1024)
@@ -40,16 +55,37 @@ static volatile link_sink_t frame_sink = LINK_USB; /* where frames go (link_set_
 #define FRAME_UART_MAX (sizeof(frame_header_t) + sizeof(frame_spectrum_t) + 1024 + 4)
 static uint8_t uart_frame_buf[FRAME_UART_MAX];
 
-/* Only the USB sink is queued: its driver drops bytes when no host reads the
- * FIFO, so a writer task and a deep ring keep the scanners off that path. The
- * UART writes straight to the driver (link_raw_to) — an item that would need a
- * queue would also need heap the C5 does not have. */
+/* Only the queued sinks use link_task: USB because its driver drops bytes when
+ * no host reads the FIFO, WS because the socket must not be written from the
+ * scanner's core. The UART writes straight to the driver (link_raw_to) — an
+ * item that would need a queue would also need heap the C5 does not have. */
 static void link_task(void *arg) {
-    (void)arg;
+    const link_sink_t sink = (link_sink_t)(intptr_t)arg;
+    const RingbufHandle_t q = queues[sink];
     for (;;) {
         size_t size;
-        uint8_t *item = xRingbufferReceive(queues[LINK_USB], &size, portMAX_DELAY);
+        uint8_t *item = xRingbufferReceive(q, &size, portMAX_DELAY);
         if (!item) continue;
+#if RX_WIFI_RELAY
+        if (sink == LINK_WS) {
+            /* A relay with no uplink keeps nothing: that is what "bounded
+             * queue" means here. One item is one frame — the bridge only
+             * delivers binary messages, and slicing a queue item across two
+             * would split a frame's bytes. ws_link_write reports -1 when the
+             * socket is gone, which is the same outcome as being down. */
+            if (!ws_link_up() || ws_link_write(item, size) < 0) drops++;
+            vRingbufferReturnItem(q, item);
+            continue;
+        }
+#endif
+#ifdef RX_W5500
+        if (sink == LINK_ETH) {
+            /* One item = one frame. Socket gone -> drop. */
+            if (!eth_server_ready() || !eth_server_write(item, size)) drops++;
+            vRingbufferReturnItem(q, item);
+            continue;
+        }
+#endif
         size_t done = 0;
         while (done < size) {
             size_t chunk = size - done > LINK_TX_CHUNK ? LINK_TX_CHUNK : size - done;
@@ -58,18 +94,46 @@ static void link_task(void *arg) {
             done += (size_t)n;
         }
         if (done < size) drops++;
-        vRingbufferReturnItem(queues[LINK_USB], item);
+        vRingbufferReturnItem(q, item);
     }
 }
 
 void link_sink_start(size_t queue_bytes) {
     queues[LINK_USB] = xRingbufferCreate(queue_bytes, RINGBUF_TYPE_NOSPLIT);
     if (!queues[LINK_USB]) return;
-    xTaskCreatePinnedToCore(link_task, "link", 4096, NULL, 5, NULL, portNUM_PROCESSORS - 1);
+    xTaskCreatePinnedToCore(link_task, "link", 4096, (void *)(intptr_t)LINK_USB, 5, NULL, portNUM_PROCESSORS - 1);
+#if RX_WIFI_RELAY
+    /* The relay's uplink queue: 32 KiB is about a minute of LEVELS frames, and
+     * past that the writer drops the oldest rather than growing. */
+    queues[LINK_WS] = xRingbufferCreate(32 * 1024, RINGBUF_TYPE_NOSPLIT);
+    if (queues[LINK_WS])
+        xTaskCreatePinnedToCore(link_task, "link_ws", 4096, (void *)(intptr_t)LINK_WS, 5, NULL, portNUM_PROCESSORS - 1);
+#endif
+    /* ETH queue is intentionally NOT created here — it would consume ~32 KB
+     * of heap before scanner_init() gets to allocate its IQ buffer, and the
+     * C5 only has ~30 KB of free heap left after the radio driver claims its
+     * pools. Call link_eth_start() *after* scanner_init() has run. */
 }
+
+#ifdef RX_W5500
+/* Start the ETH uplink queue + task. Called from main.c after eth_init()
+ * succeeds, which is after scanner_init() — so heap has the IQ buffer
+ * allocated first. Queue is 8 KB (vs 32 KB for WS) because the C5 heap is
+ * tight and a single TCP client at a time cannot consume more than one
+ * spectrum frame's worth of backpressure anyway. */
+void link_eth_start(void) {
+    if (queues[LINK_ETH]) return;
+    queues[LINK_ETH] = xRingbufferCreate(8 * 1024, RINGBUF_TYPE_NOSPLIT);
+    if (queues[LINK_ETH])
+        xTaskCreatePinnedToCore(link_task, "link_eth", 4096, (void *)(intptr_t)LINK_ETH, 5, NULL, portNUM_PROCESSORS - 1);
+}
+#endif
 
 bool link_ready(link_sink_t sink) {
     if (sink == LINK_UART) return uart_link_ready();
+#ifdef RX_W5500
+    if (sink == LINK_ETH)  return eth_server_ready();
+#endif
     return (unsigned)sink < LINK_COUNT && queues[sink];
 }
 
@@ -82,11 +146,14 @@ void link_init(void) {
 
 size_t link_capacity(void) { return xRingbufferGetMaxItemSize(queues[LINK_USB]); }
 uint32_t link_drops(void) { return drops; }
-unsigned link_fill_permille(void) {
+unsigned link_fill_permille_to(link_sink_t sink) {
     /* A no-split ring reports at most its largest possible item as free. */
-    size_t free = xRingbufferGetCurFreeSize(queues[LINK_USB]), max = xRingbufferGetMaxItemSize(queues[LINK_USB]);
+    RingbufHandle_t q = (unsigned)sink < LINK_COUNT ? queues[sink] : NULL;
+    if (!q) return 0;
+    size_t free = xRingbufferGetCurFreeSize(q), max = xRingbufferGetMaxItemSize(q);
     return free >= max ? 0 : (unsigned)(1000 - free * 1000 / max);
 }
+unsigned link_fill_permille(void) { return link_fill_permille_to(LINK_USB); }
 
 static IRAM_ATTR bool frame_put(uint8_t type, const void *a, size_t alen, const void *b, size_t blen, size_t min_free,
                       TickType_t wait) {
@@ -114,12 +181,17 @@ static IRAM_ATTR bool frame_put(uint8_t type, const void *a, size_t alen, const 
         memcpy(p + sizeof(h) + len, &crc, 4);
         return link_raw_to(LINK_UART, p, total);
     }
-    if (min_free && xRingbufferGetCurFreeSize(queues[LINK_USB]) < total + min_free) {
+    RingbufHandle_t q = queues[link_frame_queue(type, frame_sink)];
+    if (!q) {
+        drops++;
+        return false; /* a sink that was never started */
+    }
+    if (min_free && xRingbufferGetCurFreeSize(q) < total + min_free) {
         drops++;
         return false;
     }
     void *slot;
-    if (xRingbufferSendAcquire(queues[LINK_USB], &slot, total, wait) != pdTRUE) {
+    if (xRingbufferSendAcquire(q, &slot, total, wait) != pdTRUE) {
         drops++;
         return false;
     }
@@ -130,7 +202,7 @@ static IRAM_ATTR bool frame_put(uint8_t type, const void *a, size_t alen, const 
     if (blen) memcpy(p + sizeof(h) + alen, b, blen);
     uint32_t crc = esp_rom_crc32_le(0, p, sizeof(h) + len);
     memcpy(p + sizeof(h) + len, &crc, 4);
-    xRingbufferSendComplete(queues[LINK_USB], slot);
+    xRingbufferSendComplete(q, slot);
     return true;
 }
 
@@ -170,9 +242,14 @@ void link_set_frame_sink(link_sink_t sink) {
 link_sink_t link_frame_sink(void) { return frame_sink; }
 
 void link_flush(void) {
-    size_t size;
-    void *item;
-    while ((item = xRingbufferReceive(queues[LINK_USB], &size, 0)) != NULL) vRingbufferReturnItem(queues[LINK_USB], item);
+    /* Every queued sink: stale bytes must not reach the uplink after a
+     * reconnect either. A sink that was never started has nothing to drain. */
+    for (unsigned s = 0; s < LINK_COUNT; s++) {
+        if (s == LINK_UART || !queues[s]) continue;
+        size_t size;
+        void *item;
+        while ((item = xRingbufferReceive(queues[s], &size, 0)) != NULL) vRingbufferReturnItem(queues[s], item);
+    }
 }
 
 static bool printf_to(link_sink_t sink, const char *fmt, va_list ap) {
@@ -199,6 +276,12 @@ bool link_printf(const char *fmt, ...) {
 
 int link_read_from(link_sink_t sink, uint8_t *buf, size_t capacity, uint32_t timeout_ms) {
     if (sink == LINK_UART) return uart_link_read(buf, capacity, timeout_ms);
+#if RX_WIFI_RELAY
+    if (sink == LINK_WS) return ws_link_read(buf, capacity, timeout_ms);
+#endif
+#ifdef RX_W5500
+    if (sink == LINK_ETH) return eth_server_read(buf, capacity, timeout_ms);
+#endif
     return usb_serial_jtag_read_bytes(buf, capacity, timeout_ms == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms));
 }
 

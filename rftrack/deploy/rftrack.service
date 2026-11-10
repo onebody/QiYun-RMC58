@@ -1,0 +1,31 @@
+# systemd 单元（S9 部署物，主形态）：venv + EnvironmentFile，数据与代码分离。
+# 安装：
+#   sudo cp rftrack.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now rftrack
+# 日志：journalctl -u rftrack -f
+
+[Unit]
+Description=RF Track backend (site instance)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# 部署布局约定：/opt/rftrack/{repo,venv,data}，rftrack.env 里 RFTRACK_DB_PATH 指 data/
+Type=simple
+User=rftrack
+Group=rftrack
+WorkingDirectory=/opt/rftrack/repo/rftrack/backend
+EnvironmentFile=/opt/rftrack/rftrack.env
+ExecStart=/opt/rftrack/venv/bin/python serve.py
+Restart=on-failure
+RestartSec=3
+
+# 硬化：只放开数据目录，其余文件系统只读。data/ 必须 RFTRACK_DB_PATH 所在。
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/rftrack/data
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

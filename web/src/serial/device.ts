@@ -208,6 +208,8 @@ function replyMatcher(cmd: string): (item: StreamItem) => boolean {
     "METRICS?": "METRICS ",
     "GPIO?": "GPIO ",
     SYNC: "SYNC ",
+    // NET commands: reply always starts with "NET " (JSON or array or plain)
+    "NET": "NET ",
   };
   const prefix = query[word];
   if (prefix) return (i) => (i.kind === "text" && i.line.startsWith(prefix)) || isErr(i);

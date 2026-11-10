@@ -31,7 +31,11 @@
 #include "soc/usb_pins.h"
 #define USB_PINS (BIT64(USBPHY_DM_NUM) | BIT64(USBPHY_DP_NUM))
 #define UART_PINS 0
-#define LED_PINS 0
+#ifdef STATUS_LED_GPIO
+#define LED_PINS BIT64(STATUS_LED_GPIO)  /* S3-Zero board WS2812 */
+#else
+#define LED_PINS 0                       /* boards without the LED */
+#endif
 #endif
 
 /* Bit n: GPIO n in use, and if so high. Masks, not per-pin bytes: the C5's

@@ -20,3 +20,19 @@ web/public/firmware/
 
 *.widscan58
 __pycache__/
+
+# RF Track 后端：本地库、迁移前的自动备份、虚拟环境
+rftrack/backend/data/
+rftrack/backend/.backups/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+
+# 固件构建产物与本地产物（体积大，不入库）
+firmware/build/
+firmware/dist/
+firmware/sdkconfig
+firmware/*.bak
+
+# 回归测试金样本：录制格式虽为 *.widscan58，但作为测试夹具需要入库
+!tests/fixtures/*.widscan58
