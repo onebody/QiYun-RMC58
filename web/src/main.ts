@@ -24,6 +24,9 @@ import { RawIqView } from "./views/rawiq";
 import { FlashDialog } from "./views/flashDialog";
 import { GpioDialog } from "./views/gpioDialog";
 import { RhServerDialog } from "./views/rhServerDialog";
+import { NetDialog } from "./views/netDialog";
+import { DeviceList } from "./views/deviceList";
+import { DeviceManager, type ManagedDevice } from "./model/devices";
 import { ScreenWake } from "./util/wakeLock";
 import { registerServiceWorker } from "./util/pwa";
 import { lapCallout, speak } from "./util/speech";
@@ -73,6 +76,8 @@ const connectBtn = el("button", { class: "primary", "aria-haspopup": "menu", "ar
 // it, so the button is shown disabled rather than failing on click.
 const flashAvailable = WebSerialTransport.supported();
 const flashBtn = el("button", {}, "Flash device");
+const netMgmtBtn = el("button", {}, t("Device management"));
+netMgmtBtn.title = t("Configure the relay's Wi-Fi, softAP and C5 scanner mode");
 function updateFlashBtn() {
   flashBtn.disabled = !flashAvailable;
   flashBtn.title = flashAvailable
@@ -149,7 +154,7 @@ const header = el(
   { class: "top" },
   el("span", { class: "brand" }, el("span", { class: "menu-wrap" }, menuBtn, menu), el("h1", {}, "Widscan58")),
   el("span", { class: "conn-state" }, dot, connText),
-  el("span", { class: "actions" }, boardBtn, endpointSelect, el("span", { class: "menu-wrap" }, connectBtn, boardMenu), flashBtn),
+  el("span", { class: "actions" }, boardBtn, endpointSelect, el("span", { class: "menu-wrap" }, connectBtn, boardMenu), flashBtn, netMgmtBtn),
 );
 // Session sources other than a real device, shown in the protocol console.
 const sessionRow = el("div", { class: "session-row" }, simBtn, replayBtn, replayInput, recordBtn);
@@ -479,6 +484,7 @@ async function connect(transport: Transport, readOnly = false) {
     // serve.mjs sends short codes for the reasons worth explaining.
     const BRIDGE_WHY: Record<string, string> = {
       busy: "the board is already bridged to another page",
+      "taken over": "taken over by another page",
       busyport: "the board's serial port is held by another program — with one board shared with RotorHazard, click the board button first",
       "no-serial": "the server has no board to bridge",
       "node offline": "the relay node went offline",
@@ -496,6 +502,7 @@ async function connect(transport: Transport, readOnly = false) {
       bridgeTransport = null;
       bridgedEp = "";
       endpointSelect.value = "";
+      localStorage.removeItem("widscan58.lastBridge");
       void refreshEndpoints();
     }
   };
@@ -735,13 +742,48 @@ document.addEventListener("keydown", (e) => {
 /** Connect asks which board to scan when the server offers a choice. */
 async function pickBridge(opts: { restoreRh?: boolean } = {}) {
   await refreshEndpoints(); // boards may have been plugged or picked up since the last poll
+  // Also fetch discovered relay nodes from the LAN beacon API.
+  let discovered: { id: string; bridge: string | null; discovered: boolean }[] = [];
+  try {
+    const r = await fetch(`${location.origin}/api/nodes`);
+    const j = await r.json();
+    discovered = (j.nodes ?? []).filter((n: any) => n.discovered);
+  } catch { /* server may not have the endpoint yet */ }
+
   const usable = endpoints.filter(canScan);
-  if (!usable.length) {
+  if (!usable.length && !discovered.length) {
     store.addLog("error", t("No board or relay node is available on the server."));
     return;
   }
-  if (usable.length === 1) return connectBridge(usable[0].id, opts);
+  if (usable.length === 1 && discovered.length === 0) return connectBridge(usable[0].id, opts);
   boardMenu.replaceChildren(el("div", { class: "menu-label" }, t("Select a board…")));
+
+  // Discovered but not-online nodes (beaconed via LAN UDP).
+  if (discovered.length) {
+    boardMenu.append(el("div", { class: "menu-section-title" }, t("Nearby relay nodes (discovered)")));
+    for (const n of discovered) {
+      const item = el(
+        "button",
+        { class: "menu-item", role: "menuitem", title: t("Discovered via LAN beacon — connecting now will force-takeover if another page holds it") },
+        `${n.id} · ${t("not online yet")}`,
+      ) as HTMLButtonElement;
+      item.onclick = () => {
+        closeBoardMenu();
+        if (n.bridge) {
+          // Direct connection to its bridge URL (may be on another serve.mjs).
+          localStorage.setItem("widscan58.lastBridge", n.bridge);
+          void connect(new WebSocketTransport(n.bridge));
+        } else {
+          // Try this server's own endpoint id first.
+          connectBridge(`node:${n.id}`, opts);
+        }
+      };
+      boardMenu.append(item);
+    }
+  }
+
+  // Already-online endpoints.
+  boardMenu.append(el("div", { class: "menu-section-title" }, t("Boards connected to this server")));
   for (const e of endpoints) {
     if (!e.online) continue;
     if (e.kind === "uart" && !e.scannable) {
@@ -763,8 +805,7 @@ async function pickBridge(opts: { restoreRh?: boolean } = {}) {
       continue;
     }
     const name = endpointName(e);
-    const item = el("button", { class: "menu-item", role: "menuitem" }, e.busy ? t("{name} (in use)", { name }) : name) as HTMLButtonElement;
-    item.disabled = e.busy;
+    const item = el("button", { class: "menu-item", role: "menuitem" }, e.busy ? t("{name} (in use — click to take over)", { name }) : name) as HTMLButtonElement;
     item.onclick = () => {
       closeBoardMenu();
       connectBridge(e.id, opts);
@@ -785,14 +826,18 @@ function connectBridge(id?: string, opts: { restoreRh?: boolean } = {}) {
     store.addLog("error", t("No board or relay node is available on the server."));
     return;
   }
+  const info = endpoints.find((e) => e.id === ep);
+  const force = info?.busy ? "1" : "";
   userDisconnected = false;
   bridgedEp = ep;
   endpointSelect.value = ep;
-  const info = endpoints.find((e) => e.id === ep);
-  bridgeTransport = new WebSocketTransport(
-    `ws://${location.host}/serial?ep=${encodeURIComponent(ep)}`,
-    info ? endpointName(info) : ep,
-  );
+  const url = force
+    ? `ws://${location.host}/serial?ep=${encodeURIComponent(ep)}&force=1`
+    : `ws://${location.host}/serial?ep=${encodeURIComponent(ep)}`;
+  if (force) store.addLog("info", t("Board was in use — taking over."));
+  bridgeTransport = new WebSocketTransport(url, info ? endpointName(info) : ep);
+  // Remember this choice so the page can auto-reconnect on next load.
+  localStorage.setItem("widscan58.lastBridge", url);
   void connect(bridgeTransport).then(() => {
     if (opts.restoreRh !== false && !ep.startsWith("uart:")) void restoreRhIfIdle();
   });
@@ -888,6 +933,49 @@ void flashDialog.offeredVersions().then((vs) => {
   updateFirmwareText();
 });
 
+// ---- Device manager ----
+// Aggregates USB + WiFi relay + Ethernet devices from /api/endpoints, and a
+// DeviceList dialog that lets the user pick which one to connect to or manage.
+const deviceManager = new DeviceManager(2000);
+deviceManager.start();
+
+async function connectDevice(d: ManagedDevice) {
+  // Use the existing bridge connector — it builds the WS URL, creates the
+  // transport, and connects the app. Endpoint id format matches serve.mjs
+  // conventions: "serial:/dev/cu.xxx" or "node:widscan58-xxx" or "uart:/dev/xxx".
+  connectBridge(d.id);
+  deviceList.close();
+}
+
+async function manageDevice(d: ManagedDevice) {
+  if (d.kind !== "remote") {
+    store.addLog("info", "只有 WiFi relay 板子支持远程管理（配网/改名/模式）");
+    return;
+  }
+  // Ensure we're connected to this device first, then open the net dialog.
+  if (!app.device || bridgedEp !== d.id) {
+    await connectDevice(d);
+    await new Promise((r) => setTimeout(r, 300)); // let conn settle
+  }
+  await netDialog.open({
+    send: (cmd) => app.send(cmd),
+    connected: () => !!app.device?.connected,
+  });
+}
+
+const netDialog = new NetDialog();
+document.body.append(netDialog.el);
+
+const deviceList = new DeviceList(deviceManager, {
+  onConnect: (d) => { void connectDevice(d); },
+  onManage: (d) => { void manageDevice(d); },
+});
+document.body.append(deviceList.element());
+
+function openDeviceList() { deviceList.open(); }
+
+netMgmtBtn.onclick = openDeviceList;
+
 
 function stopRecording() {
   if (!recorder.active) return;
@@ -916,6 +1004,21 @@ recordBtn.onclick = () => {
 let userDisconnected = false;
 async function autoConnect() {
   if (app.device || userDisconnected || flashing) return;
+  // 1. Try the user's previously saved bridge endpoint (for relay nodes).
+  if (!bridge) {
+    const savedBridge = localStorage.getItem("widscan58.lastBridge");
+    if (savedBridge) {
+      // Only auto-connect if the endpoint is still online on THIS server.
+      const epId = new URL(savedBridge).searchParams.get("ep");
+      const stillOnline = endpoints.some((e) => e.id === epId && e.online);
+      if (stillOnline) {
+        store.addLog("info", t("Reconnecting to previous bridge"));
+        void connect(new WebSocketTransport(savedBridge));
+        return;
+      }
+    }
+  }
+  // 2. Try Web Serial (Chrome/Edge with Web Serial API).
   const port = await grantedEspressifPort();
   if (port && !app.device) {
     store.addLog("info", "reconnecting to previously granted port");

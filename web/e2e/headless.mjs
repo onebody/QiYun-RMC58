@@ -2,19 +2,47 @@
 // hardware through tools/serial_bridge.py. GPL-3.0-or-later.
 //
 //   node e2e/headless.mjs [--url http://localhost:5173/] [--bridge ws://127.0.0.1:5809 | --sim] [--out dir]
+//                         [--chrome /path/to/chrome]  # or CHROME_BIN env; auto-detect otherwise
 import puppeteer from "puppeteer-core";
 import fs from "node:fs";
 import path from "node:path";
+import {
+  parseCliArgs,
+  resolveChromeExecutable,
+  formatChromeNotFound,
+  HELP_TEXT,
+} from "./chrome-resolver.mjs";
 
-const arg = (name, def) => {
-  const i = process.argv.indexOf(name);
-  return i >= 0 ? process.argv[i + 1] : def;
-};
-const base = arg("--url", "http://localhost:5173/");
-const sim = process.argv.includes("--sim");
-const bridge = arg("--bridge", "ws://127.0.0.1:5809");
-const out = arg("--out", "e2e-out");
-const chrome = arg("--chrome", "/usr/bin/google-chrome-stable");
+// ----- CLI arg parsing (unified) -----------------------------------------
+
+const { values, unknown, help } = parseCliArgs(process.argv.slice(2), {
+  extraKnown: { "--url": "string", "--bridge": "string", "--out": "string" },
+});
+if (help) {
+  console.log(HELP_TEXT);
+  process.exit(0);
+}
+if (unknown.length > 0) {
+  console.error(`Unknown flags: ${unknown.join(", ")}\nRun with --help for usage.`);
+  process.exit(2);
+}
+
+const get = (k, def) => (k in values ? values[k] : def);
+const base   = get("--url", "http://localhost:5173/");
+const sim    = get("--sim", false);
+const bridge = get("--bridge", "ws://127.0.0.1:5809");
+const out    = get("--out", "e2e-out");
+
+// ----- Chrome resolution --------------------------------------------------
+
+const resolved = resolveChromeExecutable({ cliPath: values["--chrome"] });
+if (resolved.source === "none") {
+  console.error(formatChromeNotFound(resolved));
+  console.error(`\nReason: ${resolved.error}`);
+  process.exit(1);
+}
+console.log(`[headless] Using Chrome from ${resolved.source}: ${resolved.path}`);
+if (resolved.version) console.log(`[headless] ${resolved.version}`);
 fs.mkdirSync(out, { recursive: true });
 
 const url = sim ? `${base}?sim` : `${base}?bridge=${encodeURIComponent(bridge)}`;
@@ -25,7 +53,7 @@ const check = (name, ok, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? `  (${detail})` : ""}`);
 };
 
-const browser = await puppeteer.launch({ executablePath: chrome, headless: true, args: ["--no-sandbox"] });
+const browser = await puppeteer.launch({ executablePath: resolved.path, headless: true, args: ["--no-sandbox"] });
 const page = await browser.newPage();
 await page.setViewport({ width: 1440, height: 1000, deviceScaleFactor: 1 });
 const consoleErrors = [];

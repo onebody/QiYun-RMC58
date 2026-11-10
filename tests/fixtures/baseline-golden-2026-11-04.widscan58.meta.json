@@ -1,0 +1,22 @@
+{
+  "format": "widscan58",
+  "record": "u32 ms | u32 length | bytes (LE)",
+  "source": "synthetic",
+  "origin": "tests/protocol/golden/frames-v1.json",
+  "origin_sha256": "6e0e251de539d41bf6bfd62382c48e2ad37b47a32e0626ad2d54ecc90e40049e",
+  "streams": [
+    "text_frame_text_interleaved",
+    "frame_split_across_chunks",
+    "corrupted_frame_then_good_one",
+    "joined_mid_frame_tail_ignored",
+    "leading_garbage_needs_resync",
+    "sync0_without_sync1",
+    "empty_stream",
+    "spectrum_on_uart_cap_512"
+  ],
+  "chunks": 32,
+  "duration_ms": 2000,
+  "bytes": 1643,
+  "sha256": "e92bbe3f84eef1a11bd7abaf8bb3507108cef1c0639c6459b0f0fc4a79056f96",
+  "caveat": "合成样本：只证明回放/解析/视图链路可跑，不证明固件真实字节，也不含任何真实射频电平。"
+}

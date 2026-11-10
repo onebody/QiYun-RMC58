@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import { defineConfig, type Plugin } from "vite";
+import { configDefaults } from "vitest/config";
 
 // Writes dist/sw.js from sw.js with the build's files and a cache name from
 // their hash. FILES is the page itself: the public files, firmware/index.json
@@ -57,5 +58,47 @@ function pwaPlugin(): Plugin {
   };
 }
 
+// Dev-only mock for /api/endpoints so the DeviceList dialog renders real cards
+// during E2E without a real serve.mjs or any USB hardware. Enabled only when
+// WIDSCAN_E2E_MOCK=1 is set; every other env is unaffected.
+function devMockEndpointsPlugin(): Plugin | null {
+  if (process.env.WIDSCAN_E2E_MOCK !== "1") return null;
+  const MOCK_ENDPOINTS = [
+    // WiFi relay group (transport=wifi, shown first)
+    { id: "node:widscan58-52a1d8", kind: "remote", label: "widscan58-52a1d8", online: true, busy: false, auto: true, scannable: true },
+    { id: "node:widscan58-99ffee", kind: "remote", label: "widscan58-99ffee (busy)", online: true, busy: true, auto: true, scannable: true },
+    // USB serial group (transport=usb, shown second)
+    { id: "serial:/dev/cu.usbmodem1301", kind: "serial", label: "cu.usbmodem1301", path: "/dev/cu.usbmodem1301", online: true, busy: false, auto: true, scannable: true },
+    { id: "serial:/dev/cu.usbmodem1201", kind: "serial", label: "cu.usbmodem1201 (offline)", path: "/dev/cu.usbmodem1201", online: false, busy: false, auto: true, scannable: true },
+    // UART group (also transport=usb)
+    { id: "uart:/dev/serial0", kind: "uart", label: "serial0", online: true, busy: false, auto: false },
+  ];
+  return {
+    name: "widscan58-dev-mock-endpoints",
+    apply: "serve",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (!req.url) return next();
+        const path = req.url.split("?")[0];
+        if (path === "/api/endpoints") {
+          res.setHeader("Content-Type", "application/json; charset=utf-8");
+          res.setHeader("Cache-Control", "no-cache");
+          res.end(JSON.stringify({ endpoints: MOCK_ENDPOINTS }));
+          return;
+        }
+        next();
+      });
+    },
+  };
+}
+
 // Relative base so the static build can be opened from any path (GitHub Pages, file host).
-export default defineConfig({ base: "./", plugins: [pwaPlugin()] });
+export default defineConfig({
+  base: "./",
+  plugins: [pwaPlugin(), devMockEndpointsPlugin()].filter(Boolean),
+  test: {
+    // Inherit Vitest's default exclude (**/node_modules/**, **/.git/**) so we stay
+    // compatible with future Vitest versions; only add our local exclusions.
+    exclude: [...configDefaults.exclude, "e2e/**", "**/*.mjs"],
+  },
+});

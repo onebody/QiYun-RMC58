@@ -9,7 +9,10 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "serve": "node serve.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "node e2e/headless.mjs",
+    "e2e:sim": "node e2e/headless.mjs --sim",
+    "e2e:device-list": "bash -c 'pkill -f \"vite.*5198\" 2>/dev/null || true; WIDSCAN_E2E_MOCK=1 npx vite --port 5198 >/dev/null 2>&1 & VITE_PID=$!; sleep 3; curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5198/ | grep -q 200 || { echo \"vite failed\"; kill $VITE_PID; exit 1; }; node e2e/device-list.mjs --url http://localhost:5198/ \"$@\"; RC=$?; kill $VITE_PID; exit $RC' --"
   },
   "devDependencies": {
     "@types/spark-md5": "^3.0.5",

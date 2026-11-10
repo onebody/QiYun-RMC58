@@ -21,6 +21,7 @@ import { createReadStream, existsSync, readdirSync, realpathSync, statSync } fro
 import { createServer } from "node:http";
 import { exec } from "node:child_process";
 import { createHash } from "node:crypto";
+import dgram from "node:dgram";
 import { networkInterfaces } from "node:os";
 import { basename, dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,6 +101,7 @@ const server = createServer((req, res) => {
   // What the page can connect to: local boards bridged by this server plus
   // relay nodes that connected in. Anonymous LAN callers get no more than this.
   if (req.url === "/api/endpoints") return sendJson(res, 200, { endpoints: listEndpoints() });
+  if (req.url === "/api/nodes") return sendJson(res, 200, listNodes());
   if (req.url === "/api/mode") {
     if (req.method === "GET")
       return sendJson(res, 200, { state: boardLink, stop: !!rhStopCmd, start: !!rhStartCmd, bridged: pages.size > 0 });
@@ -174,6 +176,96 @@ server.on("error", (e) => {
 const pages = new Map(); // endpoint id -> page socket
 const nodes = new Map(); // node id -> { socket, id, page }
 
+/* ---------- LAN discovery: Serves UDP beacons on port 45124 that both
+ * other serve.mjs instances and (later) the relay firmware use to announce
+ * themselves, so a page can show every relay it has ever heard about, even
+ * ones that have not connected to THIS server yet. Each beacon is a short
+ * JSON object; servers refresh every 5 s, entries expire after 30 s of
+ * silence. This is NOT a security boundary — it is discovery only; the
+ * page still needs a live bridge to actually scan through a node. -------- */
+const DISCOVERY_PORT = 45124;
+const discoveredNodes = new Map(); // nodeId -> { bridge, lastSeen, discovered: true }
+const discoveredServers = new Map(); // "host:port" -> { lastSeen }
+let discoverySock = null;
+
+function nowMs() { return Date.now(); }
+
+/* Expire stale entries, called before we serve them. */
+function expireDiscovered(maxAgeMs = 30_000) {
+  const cut = nowMs() - maxAgeMs;
+  for (const [id, info] of discoveredNodes) if (info.lastSeen < cut) discoveredNodes.delete(id);
+  for (const [k, info] of discoveredServers) if (info.lastSeen < cut) discoveredServers.delete(k);
+}
+
+function listNodes() {
+  expireDiscovered();
+  const nodeList = [];
+  for (const [id, info] of nodes) {
+    // Bridge to THIS server
+    const hostPart = Object.values(networkInterfaces()).flat().find(a => a?.family === "IPv4" && !a.internal)?.address ?? "localhost";
+    nodeList.push({
+      id,
+      kind: "relay",
+      online: true,
+      bridge: `ws://${hostPart}:${port}/serial?ep=node%3A${encodeURIComponent(id)}`,
+      discovered: false,
+    });
+  }
+  for (const [id, info] of discoveredNodes) {
+    if (nodes.has(id)) continue; // already listed above
+    nodeList.push({ id, kind: info.kind ?? "relay", online: false, bridge: info.bridge ?? null, discovered: true });
+  }
+  const serverList = [];
+  for (const [k, info] of discoveredServers) {
+    if (info.host === "0.0.0.0" || info.host === "localhost") continue;
+    serverList.push({ ...info, key: k });
+  }
+  return { nodes: nodeList, servers: serverList };
+}
+
+function startDiscovery() {
+  discoverySock = dgram.createSocket({ type: "udp4", reuseAddr: true });
+  discoverySock.on("error", (e) => console.warn("discovery UDP err:", e.message));
+  discoverySock.on("message", (buf, rinfo) => {
+    let msg;
+    try { msg = JSON.parse(buf.toString()); } catch { return; }
+    if (!msg || msg.type !== "widscan-relay") return;
+    const ts = nowMs();
+    if (msg.id) discoveredNodes.set(msg.id, {
+      kind: msg.kind ?? "relay",
+      bridge: msg.bridge,
+      host: rinfo.address,
+      lastSeen: ts,
+    });
+    if (msg.servers) {
+      for (const s of msg.servers) {
+        const key = `${s.host}:${s.port}`;
+        discoveredServers.set(key, { ...s, lastSeen: ts });
+      }
+    }
+  });
+  discoverySock.bind(DISCOVERY_PORT, () => {
+    discoverySock.setBroadcast(true);
+    // Broadcast this server every 5 s.
+    setInterval(() => {
+      const hosts = [];
+      for (const addrs of Object.values(networkInterfaces())) {
+        for (const a of addrs ?? [])
+          if (a.family === "IPv4" && !a.internal) hosts.push({ host: a.address, port });
+      }
+      const nodeIds = [...nodes.keys()];
+      const msg = JSON.stringify({
+        type: "widscan-relay",
+        servers: hosts,
+        nodes: nodeIds,
+      });
+      if (!discoverySock) return;
+      discoverySock.send(msg, 0, msg.length, DISCOVERY_PORT, "255.255.255.255");
+    }, 5000);
+  });
+  console.log(`Discovery: UDP port ${DISCOVERY_PORT} (relay LAN beacon)`);
+}
+
 /** The ttys this server may bridge: /dev/widscan58 plus widscan58-<serial>. */
 function listSerials() {
   if (!serialPrefix) return [];
@@ -202,8 +294,72 @@ function listSerials() {
   return [...byTty.values()].sort();
 }
 
+/** Auto-discover USB CDC ACM devices across platforms:
+ *  - macOS: /dev/cu.usbmodem*  (ESP32-S3/C5 native USB)
+ *  - Linux: /dev/ttyACM*       (ESP32 via USB CDC)
+ *  - Linux: /dev/ttyUSB*       (FTDI/CH340 USB→UART bridges)
+ *  Returns an array of { path, label } sorted by most recently plugged in
+ *  (highest numeric suffix wins when both cu.usbmodem1201 and 1301 present).
+ */
+function listUsbDevices() {
+  const dirs = ["/dev"];
+  const patterns = [
+    { dir: "/dev", prefix: "cu.usbmodem" },   // macOS
+    { dir: "/dev", prefix: "cu.usbserial" },  // macOS (FTDI)
+    { dir: "/dev", prefix: "ttyACM" },        // Linux ESP32-S3/C5
+    { dir: "/dev", prefix: "ttyUSB" },        // Linux USB→UART
+  ];
+  const found = [];
+  for (const p of patterns) {
+    let names;
+    try {
+      names = readdirSync(p.dir).filter((n) => n.startsWith(p.prefix));
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const path = join(p.dir, name);
+      if (statSync(path).isCharacterDevice()) {
+        found.push({ path, label: name });
+      }
+    }
+  }
+  // Deduplicate by realpath
+  const byTty = new Map();
+  for (const d of found) {
+    let tty;
+    try { tty = realpathSync(d.path); } catch { tty = d.path; }
+    if (!byTty.has(tty)) byTty.set(tty, d);
+  }
+  // Sort: highest numeric suffix first (most recently plugged in often wins)
+  const sorted = [...byTty.values()].sort((a, b) => {
+    const na = parseInt(a.label.match(/(\d+)$/)?.[1] ?? "0", 10);
+    const nb = parseInt(b.label.match(/(\d+)$/)?.[1] ?? "0", 10);
+    return nb - na;
+  });
+  return sorted;
+}
+
 function listEndpoints() {
   const out = [];
+  // USB 串口设备（auto-discover），去重逻辑：如果 serialPrefix 匹配到了
+  // 同一个 realpath，跳过 auto-discover 版本
+  const serialPaths = new Set(listSerials().map((p) => { try { return realpathSync(p); } catch { return p; } }));
+  for (const usb of listUsbDevices()) {
+    let tty;
+    try { tty = realpathSync(usb.path); } catch { tty = usb.path; }
+    if (serialPaths.has(tty)) continue; // already covered by serialPrefix
+    const id = `serial:${usb.path}`;
+    out.push({
+      id,
+      kind: "serial",
+      label: usb.label,
+      path: usb.path,
+      online: true,
+      busy: pages.has(id),
+      auto: true, // discovered by auto-scan vs udev alias
+    });
+  }
   for (const path of listSerials()) {
     const id = `serial:${path}`;
     out.push({ id, kind: "serial", label: basename(path), path, online: true, busy: pages.has(id) });
@@ -358,7 +514,7 @@ function readFrames(socket, head, onBinary, onClose) {
   socket.on("error", finish);
 }
 
-server.on("upgrade", (req, socket, head) => {
+server.on("upgrade", async (req, socket, head) => {
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
   const deny = (code, msg) => {
@@ -379,7 +535,23 @@ server.on("upgrade", (req, socket, head) => {
   if (path === "/node") return attachNode(socket, head, url.searchParams.get("id"));
   const ep = url.searchParams.get("ep") ?? defaultEndpoint();
   if (!ep) return void socket.end(wsCloseFrame("no-serial"));
-  if (pages.has(ep)) return void socket.end(wsCloseFrame("busy"));
+  const force = url.searchParams.get("force") === "1";
+  const old = pages.get(ep);
+  if (old) {
+    if (!force) return void socket.end(wsCloseFrame("busy"));
+    console.log(`bridge: evicting old holder of ${ep}`);
+    old.end(wsCloseFrame("taken over"));
+    pages.delete(ep);
+    // Give the old socket a tick to flush the close frame before we take over.
+    await new Promise((r) => setImmediate(r));
+    // Serial ports are owned by bridgeSerial; release the port cleanly.
+    if (ep.startsWith("serial:") || ep.startsWith("uart:")) {
+      // bridgeSerial/bridgeUart already registered close handlers via
+      // readFrames's onClose; they fire on socket "close", not "end", so
+      // force-close the socket to trigger cleanup.
+      old.destroy();
+    }
+  }
   const remote = /^node:(.+)$/.exec(ep);
   if (remote) return bridgeRemote(socket, head, ep, remote[1]);
   const local = /^serial:(.+)$/.exec(ep);
@@ -410,6 +582,7 @@ function attachNode(socket, head, rawId) {
     socket,
     head,
     (payload) => {
+      console.log(`DBG node→page ${payload.length}B page=${!!node.page}`);
       if (node.page?.writable) sendBinary(node.page, payload);
     },
     () => {
@@ -431,6 +604,7 @@ function bridgeRemote(socket, head, ep, id) {
   pages.set(ep, socket);
   console.log(`node: bridging ${id} to a page`);
   readFrames(socket, head, (payload) => {
+    console.log(`DBG page→node ${payload.length}B head=${head}`);
     if (node.socket.writable) sendBinary(node.socket, payload);
   }, () => {
     if (node.page === socket) node.page = null;
@@ -534,4 +708,5 @@ server.listen(port, host, () => {
   console.log(`Relay nodes: ws://<this-host>:${port}/node?id=<name>`);
   if (rhStopCmd || rhStartCmd) console.log("Board link switch: on (POST /api/mode {mode:scan|rh})");
   else console.log("Board link switch: off (start with --rh-stop-cmd/--rh-start-cmd to enable)");
+  try { startDiscovery(); } catch (e) { console.warn("Discovery disabled:", e.message); }
 });
