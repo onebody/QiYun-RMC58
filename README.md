@@ -83,6 +83,9 @@ green).
 4. Click **Connect device** and pick the board. Chrome remembers it, so next time
    it reconnects by itself.
 
+仓库里每条分支的角色、哪些线故意不进 main，以及「GitHub 上看着比本地少功能」该查
+Pages / 源码 / Releases 哪一层，见 [docs/BRANCHES.zh-CN.md](docs/BRANCHES.zh-CN.md)。
+
 ## Credits
 
 QiYun-RMC58 would not exist without **[C5VRX](https://github.com/Twotoz/C5VRX)** and
