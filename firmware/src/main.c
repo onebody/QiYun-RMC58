@@ -25,6 +25,10 @@
 #include "uart_link.h"
 #include "ws_link.h"
 #endif
+#ifdef RX_W5500
+#include "eth_w5500.h"
+#include "eth_server.h"
+#endif
 
 /* Required by the stock RF test archive; no shell is exposed. */
 int cmd_parse(char *cmd, char *name, int *argc, char **argv) {
@@ -92,7 +96,10 @@ void app_main(void) {
     }
     ESP_ERROR_CHECK(e);
     gpio_out_init(); /* the saved board outputs (e.g. an antenna switch), before the radio */
-    (void)status_led_init(); /* first for its heap; no LED or no memory is not fatal */
+    {
+        esp_err_t led_err = status_led_init();
+        printf("STATUS_LED init: err=%d (SL_BOOT red slow blink)\n", (int)led_err);
+    }
     link_init();
     BOOT_CHECK(esp_event_loop_create_default());
 #if RX_WIFI_RELAY
@@ -104,8 +111,14 @@ void app_main(void) {
      * relay forwards comes from the C5 over the UART (M2).
      * ws_link.c owns esp_wifi_init and the STA mode, so no esp_wifi_* here. */
     net_prefs_t prefs = {0};
+    printf("BOOTSTEP 1 pre-prefs\n");
     if (net_prefs_load(&prefs) != ESP_OK) link_printf("ERR net_prefs\n");
+    printf("BOOTSTEP 2 prefs on=%d ssid='%s' url='%s'\n", (int)prefs.on, prefs.ssid, prefs.url);
+    link_printf("PROBE pre_wifi heap=%u largest=%u\n",
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     BOOT_CHECK(rh_init());
+    printf("BOOTSTEP 3 rh_init done\n");
     /* The ring first: the command task reads LINK_WS from boot, whether or not
      * the uplink ever gets armed. Returns esp_err_t, so ESP_OK is the success -
      * `if (!...)` would report a working ring as a failed one. */
@@ -114,9 +127,26 @@ void app_main(void) {
      * actually on, and 0/0 keeps U0TXD/U0RXD. Failing here is not fatal - the
      * relay still uplinks its own replies, and NET STATUS shows head_ready. */
     if (!uart_link_open(prefs.tx, prefs.rx)) link_printf("ERR head_uart\n");
+#if RX_WIFI_RELAY
+    /* LOOPBACK self-test: if GP43(TX) shorted to GP44(RX) on this board,
+     * this PING will echo back and pipe_task sees it immediately. */
+    {
+        const char *ping = "PING\n";
+        int w = uart_link_write((const uint8_t *)ping, 5);
+        printf("[PING] wrote %d bytes to UART (TX→RX short?)\n", w);
+    }
+#endif
     relay_pipe_start();
     commands_task_start();
-    if (prefs.on && prefs.ssid[0] && prefs.url[0] && !ws_link_start(&prefs))
+    printf("BOOTSTEP 4 cmd task started\n");
+    link_printf("PROBE pre_dial heap=%u largest=%u\n",
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    printf("BOOTSTEP 5 calling ws_link_start\n");
+    /* Always arm the uplink — even with blank creds. ws_link_start brings up
+     * the Wi-Fi driver, and dial_task_fn chooses STA (with creds) or softAP
+     * (blank creds, or STA long down, or dial exhausted) on its own. */
+    if (!ws_link_start(&prefs))
         link_printf("ERR net_start\n"); /* NET STATUS carries the reason */
     return;
 #endif
@@ -131,5 +161,25 @@ void app_main(void) {
     BOOT_CHECK(radio_init());
     BOOT_CHECK(rh_init()); /* before the scanner can feed seats */
     BOOT_CHECK(scanner_init());
+#ifdef RX_W5500
+    /* W5500 SPI Ethernet — optional: hardware may be absent, so a failed
+     * bring-up only logs and the firmware keeps scanning. lwIP is not needed
+     * here: we use W5500's built-in TCP/IP stack directly (see eth_w5500.c).
+     * NOTE: order matters — link_eth_start() must come AFTER scanner_init()
+     * because it allocates an 8 KB heap queue, and scanner_init() also needs
+     * ~20 KB for its IQ buffer. link_init() deliberately no longer creates
+     * the ETH queue early; see link.c:link_eth_start(). */
+    {
+        esp_err_t e = eth_init();
+        if (e == ESP_OK) {
+            link_eth_start();
+            eth_listen();
+            eth_server_start();
+            link_printf("ETH OK W5500 TCP %d\n", ETH_TCP_PORT);
+        } else {
+            link_printf("ETH ERR eth_init=%s\n", esp_err_to_name(e));
+        }
+    }
+#endif
     commands_task_start(); /* silent from here on until a host speaks (commands.c) */
 }

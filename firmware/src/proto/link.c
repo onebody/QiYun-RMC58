@@ -14,12 +14,24 @@
 #if RX_WIFI_RELAY
 #include "ws_link.h"
 #endif
+#ifdef RX_W5500
+#include "eth_server.h"
+#endif
 
 #if RX_TARGET_C5
 /* The C5 heap is ~125 KB once the 128 KiB capture bank is reserved, and Wi-Fi
  * needs much of what's left. RAWIQ goes out in chunks, so the queue only has
  * to hold a reply (3 KB) and ride out short host stalls. */
 #define LINK_QUEUE_BYTES (16 * 1024)
+#define LINK_USB_TX_BYTES 4096
+#elif RX_WIFI_RELAY
+/* A relay never puts a frame on its USB sink - that is the head's bytes going
+ * out LINK_WS, and what USB carries here is an ASCII reply. So the scanner's
+ * 72 KiB burst queue is dead weight, and it is dead weight in the one place the
+ * relay cannot afford it: internal RAM, before esp_wifi_init. Measured on the
+ * board with these two back (2026-11-02): free 27,984, largest block 9,216,
+ * esp_wifi_init ESP_ERR_NO_MEM, and NET STATUS saying so. */
+#define LINK_QUEUE_BYTES (4 * 1024)
 #define LINK_USB_TX_BYTES 4096
 #else
 #define LINK_QUEUE_BYTES (72 * 1024)
@@ -66,6 +78,14 @@ static void link_task(void *arg) {
             continue;
         }
 #endif
+#ifdef RX_W5500
+        if (sink == LINK_ETH) {
+            /* One item = one frame. Socket gone -> drop. */
+            if (!eth_server_ready() || !eth_server_write(item, size)) drops++;
+            vRingbufferReturnItem(q, item);
+            continue;
+        }
+#endif
         size_t done = 0;
         while (done < size) {
             size_t chunk = size - done > LINK_TX_CHUNK ? LINK_TX_CHUNK : size - done;
@@ -89,10 +109,31 @@ void link_sink_start(size_t queue_bytes) {
     if (queues[LINK_WS])
         xTaskCreatePinnedToCore(link_task, "link_ws", 4096, (void *)(intptr_t)LINK_WS, 5, NULL, portNUM_PROCESSORS - 1);
 #endif
+    /* ETH queue is intentionally NOT created here — it would consume ~32 KB
+     * of heap before scanner_init() gets to allocate its IQ buffer, and the
+     * C5 only has ~30 KB of free heap left after the radio driver claims its
+     * pools. Call link_eth_start() *after* scanner_init() has run. */
 }
+
+#ifdef RX_W5500
+/* Start the ETH uplink queue + task. Called from main.c after eth_init()
+ * succeeds, which is after scanner_init() — so heap has the IQ buffer
+ * allocated first. Queue is 8 KB (vs 32 KB for WS) because the C5 heap is
+ * tight and a single TCP client at a time cannot consume more than one
+ * spectrum frame's worth of backpressure anyway. */
+void link_eth_start(void) {
+    if (queues[LINK_ETH]) return;
+    queues[LINK_ETH] = xRingbufferCreate(8 * 1024, RINGBUF_TYPE_NOSPLIT);
+    if (queues[LINK_ETH])
+        xTaskCreatePinnedToCore(link_task, "link_eth", 4096, (void *)(intptr_t)LINK_ETH, 5, NULL, portNUM_PROCESSORS - 1);
+}
+#endif
 
 bool link_ready(link_sink_t sink) {
     if (sink == LINK_UART) return uart_link_ready();
+#ifdef RX_W5500
+    if (sink == LINK_ETH)  return eth_server_ready();
+#endif
     return (unsigned)sink < LINK_COUNT && queues[sink];
 }
 
@@ -237,6 +278,9 @@ int link_read_from(link_sink_t sink, uint8_t *buf, size_t capacity, uint32_t tim
     if (sink == LINK_UART) return uart_link_read(buf, capacity, timeout_ms);
 #if RX_WIFI_RELAY
     if (sink == LINK_WS) return ws_link_read(buf, capacity, timeout_ms);
+#endif
+#ifdef RX_W5500
+    if (sink == LINK_ETH) return eth_server_read(buf, capacity, timeout_ms);
 #endif
     return usb_serial_jtag_read_bytes(buf, capacity, timeout_ms == UINT32_MAX ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms));
 }

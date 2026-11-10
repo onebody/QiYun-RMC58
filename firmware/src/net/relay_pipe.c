@@ -23,23 +23,24 @@ static volatile uint32_t lost_down;
 
 static void pipe_task_fn(void *arg) {
     (void)arg;
-    /* Not on the stack: this task's whole job is to move a 1 KB chunk, and the
-     * relay's heap is where the RAM lives (the link queue is already 72 KiB). */
     static uint8_t chunk[PIPE_CHUNK];
+    printf("[PIPE] pipe_task started, uart_link_ready=%d\n", uart_link_ready());
+    int polled_zero = 0;
     for (;;) {
         if (!uart_link_ready()) {
-            /* NET UART reopened the link on another pair; the wire may also be
-             * idle while nobody has armed a head at all. */
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
         const int n = uart_link_read(chunk, sizeof(chunk), PIPE_POLL_MS);
-        if (n <= 0) continue;
-        /* Bounded by the queue link_raw_to already is: with the socket down we
-         * drain the UART (so the head keeps sweeping and the gap in the
-         * recording is real) and count what we could not send. Parking here
-         * instead would let noise accumulate in the ring and then blast it at
-         * the uplink on reconnect. */
+        if (n <= 0) {
+            polled_zero++;
+            if (polled_zero % 50 == 0) {
+                printf("[PIPE] no data from head (%d polls)\n", polled_zero);
+            }
+            continue;
+        }
+        polled_zero = 0;
+        printf("[PIPE] got %d bytes from head: %.64s\n", n, chunk);
         if (!ws_link_up()) {
             lost_down += (uint32_t)n;
             continue;
@@ -70,5 +71,8 @@ bool relay_pipe_send(const char *line) {
     char cmd[128];
     const int n = snprintf(cmd, sizeof(cmd), "%s\n", line);
     if (n <= 0 || (size_t)n >= sizeof(cmd)) return false;
-    return uart_link_write(cmd, (size_t)n) == n;
+    const int w = uart_link_write(cmd, (size_t)n);
+    printf("[PIPE] send %d bytes to head: %s → %s\n",
+           n - 1, w == n ? "OK" : "FAIL", line);
+    return w == n;
 }

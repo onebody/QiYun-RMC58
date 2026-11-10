@@ -8,7 +8,7 @@
 typedef struct {
     char ssid[33]; /* IEEE 802.11 caps it at 32 */
     char pass[65]; /* WPA2 passphrase caps at 63; 64 leaves a NUL and slack */
-    char url[129]; /* ws://host:port/node?id=... */
+    char url[129]; /* server address: bare "host[:port][/path]" or ws:// URL */
     char id[33];   /* the name the bridge lists us under */
     uint16_t tx, rx; /* relay: the head link's pair. 0 = the compiled defaults */
     bool on;

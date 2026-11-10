@@ -102,14 +102,23 @@ static bool head_install(void) {
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    if (uart_param_config(UART_LINK_PORT, &cfg) != ESP_OK) return false;
-    if (uart_set_pin(UART_LINK_PORT, pin_tx, pin_rx, -1, -1) != ESP_OK) return false;
-    if (uart_driver_install(UART_LINK_PORT, UART_LINK_RX_BYTES, UART_LINK_TX_BYTES, 0, NULL, 0) != ESP_OK)
-        return false;
+    esp_err_t e;
+    /* Reset the pins first: USB Serial/JTAG or earlier UART usage may leave
+     * them in a mux state that blocks RX even after uart_set_pin(). */
+    gpio_reset_pin(pin_tx);
+    gpio_reset_pin(pin_rx);
+    gpio_pullup_dis(pin_rx);
+    e = uart_param_config(UART_LINK_PORT, &cfg);
+    if (e != ESP_OK) { printf("[UART] param_config err=%s\n", esp_err_to_name(e)); return false; }
+    e = uart_set_pin(UART_LINK_PORT, pin_tx, pin_rx, -1, -1);
+    if (e != ESP_OK) { printf("[UART] set_pin err=%s\n", esp_err_to_name(e)); return false; }
+    e = uart_driver_install(UART_LINK_PORT, UART_LINK_RX_BYTES, UART_LINK_TX_BYTES, 0, NULL, 0);
+    if (e != ESP_OK) { printf("[UART] driver_install err=%s\n", esp_err_to_name(e)); return false; }
     /* Same reason as the C5 branch: an unpowered head leaves the line floating
      * and the ring fills with noise that the uplink would pay to carry. */
     gpio_pullup_en(pin_rx);
     installed = true;
+    printf("[UART] installed port=%d tx=%d rx=%d baud=%u\n", UART_LINK_PORT, pin_tx, pin_rx, (unsigned)UART_LINK_BAUD);
     return true;
 }
 

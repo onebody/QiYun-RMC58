@@ -136,11 +136,16 @@ ws_head_t ws_read_head(const uint8_t *buf, size_t have) {
 bool ws_parse_url(const char *url, char *host, size_t host_cap, uint16_t *port, char *path, size_t path_cap,
                   const char **why) {
     *why = "url";
-    if (strncmp(url, "ws://", 5)) {
-        *why = !strncmp(url, "wss://", 6) ? "wss_unsupported" : "scheme";
+    /* Accept both "ws://host[:port][/path]" and the bare "host[:port][/path]"
+     * the setup page saves — the operator types "192.168.8.156:8080" and the
+     * scheme is implied. Only ws exists here; wss needs TLS we don't ship. */
+    const char *rest = url;
+    if (!strncmp(url, "wss://", 6)) {
+        *why = "wss_unsupported";
         return false;
     }
-    const char *rest = url + 5, *slash = strchr(rest, '/');
+    if (!strncmp(url, "ws://", 5)) rest = url + 5;
+    const char *slash = strchr(rest, '/');
     size_t authority = slash ? (size_t)(slash - rest) : strlen(rest);
     const char *colon = memchr(rest, ':', authority);
     size_t hlen = colon ? (size_t)(colon - rest) : authority;
@@ -167,9 +172,13 @@ bool ws_parse_url(const char *url, char *host, size_t host_cap, uint16_t *port, 
         }
         *port = (uint16_t)v;
     }
-    if (!slash) { /* serve.mjs only answers /node and /serial */
-        *why = "path";
-        return false;
+    if (!slash) { /* serve.mjs only answers /node and /serial — default /node */
+        if (strlen("/node") >= path_cap) {
+            *why = "path_length";
+            return false;
+        }
+        strcpy(path, "/node");
+        return true;
     }
     if (strlen(slash) >= path_cap) {
         *why = "path_length";

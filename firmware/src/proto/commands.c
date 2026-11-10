@@ -20,6 +20,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include "esp_app_desc.h"
+#include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -41,6 +43,7 @@
 #if RX_WIFI_RELAY
 #include "net_prefs.h"
 #include "relay_pipe.h"
+#include "softap.h"
 #include "ws_codec.h"
 #include "ws_link.h"
 #endif
@@ -116,7 +119,13 @@ static void send_profile(const scan_config_t *c) {
 }
 
 typedef enum { PROTO_RH, PROTO_MONITOR } proto_t;
+#if RX_WIFI_RELAY
+/* Relay has no RotorHazard competitor on LINK_WS: start in monitor mode so
+ * INFO, HEAD, PROTOCOL? etc. are parsed as our commands, not RH byte frames. */
+static proto_t proto = PROTO_MONITOR;
+#else
 static proto_t proto = PROTO_RH;
+#endif
 /* Scan configuration of the protocol not in use, restored on a switch. */
 static scan_config_t other_cfg;
 
@@ -268,7 +277,10 @@ static bool is_head(const char *line) { return !strcmp(line, "HEAD") || !strncmp
  * opt-in, so a typo can never look like an answer from a board nobody asked
  * anything of - and the relay's own INFO still answers about the relay. */
 static bool relay_allowed(const char *line) {
-    static const char *const exact[] = {"INFO", "PROTOCOL?", "REBOOT"};
+    /* PROTOCOL MONITOR/RH go straight to the head (commands.c PROTOCOL branch
+     * has the RX_WIFI_RELAY forwarding); allow them here so handle() reaches
+     * that branch instead of answering ERR noscanner. */
+    static const char *const exact[] = {"INFO", "PROTOCOL?", "PROTOCOL MONITOR", "PROTOCOL RH", "REBOOT"};
     if (is_net(line) || is_head(line)) return true;
     for (unsigned j = 0; j < sizeof(exact) / sizeof(exact[0]); j++)
         if (!strcmp(line, exact[j])) return true;
@@ -397,6 +409,7 @@ static bool parse_channels(char *args, const profile_t *p, scan_config_t *c) {
 }
 
 static void handle(char *line, link_sink_t sink) {
+    printf("HANDLE sink=%d proto=%d line='%s'\n", (int)sink, (int)proto, line);
     reply_sink = sink;
     if (proto == PROTO_RH && !rh_allowed(line)) {
         reply_text("ERR rh_mode\n");
@@ -405,6 +418,11 @@ static void handle(char *line, link_sink_t sink) {
     scan_config_t c;
 #if RX_WIFI_RELAY
     if (!relay_allowed(line)) {
+        /* Relay 没有 scanner/radio，这些命令必须透传到 head (C5)。
+         * 预检查块 (commands.c:918) 应该已经拦截了；这里再试一次转发，
+         * 作为预检查的双重保险。转发成功则 head 的回复会原路返回
+         * (pipe_task_fn → link_raw_to(LINK_WS) → serve.mjs → 页面)。 */
+        if (relay_pipe_send(line)) return;
         reply_text("ERR noscanner\n");
         return;
     }
@@ -421,10 +439,19 @@ static void handle(char *line, link_sink_t sink) {
     if (!strcmp(line, "INFO")) {
         /* fw_ver is PROJECT_VER (git describe, see firmware/CMakeLists.txt); the
          * web UI compares it with the build it offers to flash. Then HEAD's
-         * commit time and the PHY library's version. Fields are separated by
-         * '|', which none of them contains (the PHY version has spaces). */
-        reply_printf("INFO widscan58|%s|%d|%s|%s|%s\n", radio_caps()->target, PROTO_VERSION,
-                    esp_app_get_description()->version, FW_COMMIT_DATE, radio_phy_version());
+         * commit time and the PHY library's version. eFuse MAC — the only truly
+         * stable hardware identity (doesn't change across USB ports, firmware
+         * upgrades or Agent restarts). Finally uptime_ms — ms since boot, which
+         * Agent uses to detect device reboots for device_boot_id management.
+         * Fields separated by '|'; the PHY version has spaces but stays last. */
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        uint32_t up = (uint32_t)(esp_timer_get_time() / 1000);
+        reply_printf("INFO widscan58|%s|%d|%s|%s|%s|%02x:%02x:%02x:%02x:%02x:%02x|%lu\n",
+                    radio_caps()->target, PROTO_VERSION,
+                    esp_app_get_description()->version, FW_COMMIT_DATE, radio_phy_version(),
+                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+                    (unsigned long)up);
     } else if (!strcmp(line, "PROFILE?")) {
         send_profile(&c);
     } else if (!strcmp(line, "CHANNELS DEFAULT")) {
@@ -463,8 +490,19 @@ static void handle(char *line, link_sink_t sink) {
     } else if (!strcmp(line, "LEVELFILTER?")) {
         reply_printf("LEVELFILTER %s\n", level_filter_name(rh_get_filter()));
     } else if (!strcmp(line, "PROTOCOL?")) {
+#if RX_WIFI_RELAY
+        /* Relay has no scanner; the head owns the real protocol state. */
+        if (!relay_pipe_send("PROTOCOL?")) reply_text("ERR head_down\n");
+        return;
+#else
         reply_printf("PROTOCOL %s\n", proto == PROTO_RH ? "RH" : "MONITOR");
+#endif
     } else if (!strcmp(line, "PROTOCOL RH") || !strcmp(line, "PROTOCOL MONITOR")) {
+#if RX_WIFI_RELAY
+        /* Protocol switches go straight to the head; the relay does not retune. */
+        if (!relay_pipe_send(line)) reply_text("ERR head_down\n");
+        return;
+#else
         bool monitor = line[9] == 'M';
         /* MONITOR over the UART is allowed; the link just has to exist
          * (the S3 has no UART link, and an absent Pi port cannot carry it). */
@@ -496,6 +534,7 @@ static void handle(char *line, link_sink_t sink) {
          * has nothing to do with a serial line rate (M2 changes that). */
         link_set_frame_sink(monitor ? sink : LINK_USB);
         reply_text("OK\n");
+#endif
     } else if (!strcmp(line, "ENABLE?")) {
         reply_printf("ENABLE %" PRIu32 "\n", c.enabled);
     } else if (sscanf(line, "ENABLE %31s %c", arg, &extra) == 1 && parse_u32(arg, &a)) {
@@ -709,6 +748,25 @@ static void handle(char *line, link_sink_t sink) {
             reply_send();
             return;
         }
+        if (!strcmp(line, "HEAD LOOPBACK")) {
+            /* Write 12 test bytes to UART, then poll 50ms×40 for any echo.
+             * Hardware test: short GP43(TX) to GP44(RX) on S3 itself to verify
+             * both TX and RX are alive. */
+            static const char test[] = "LOOPBACK1234";
+            int w = uart_link_write((const uint8_t *)test, sizeof(test));
+            printf("[LOOP] wrote %d/%d bytes\n", w, (int)sizeof(test));
+            uint8_t rx[64];
+            int total = 0;
+            for (int i = 0; i < 40; i++) {
+                int n = uart_link_read(rx + total, sizeof(rx) - total, 50);
+                if (n > 0) { total += n; if (total >= (int)sizeof(rx)) break; }
+            }
+            printf("[LOOP] received %d bytes: %.64s\n", total, rx);
+            char hex[129];
+            for (int i = 0; i < total && i < 16; i++) sprintf(hex + i*2, "%02x", rx[i]);
+            reply_printf("LOOPBACK write=%d read=%d hex=%s\n", w, total, total > 0 ? hex : "none");
+            return;
+        }
         if (!relay_pipe_send(line + 5)) reply_text("ERR head_down\n");
         /* No local OK on success: the head's own reply *is* the reply, and a
          * second line would look like a second board answering. */
@@ -787,6 +845,33 @@ static void handle(char *line, link_sink_t sink) {
             if (e != ESP_OK) reply_printf("ERR save %s\n", esp_err_to_name(e));
             else reply_text("OK\n");
             return;
+        } else if (!strcmp(arg, "SCAN")) {
+            /* List nearby APs as a JSON array, best-RSSI first. Requires Wi-Fi
+             * to be up — we bring it up in STA mode if necessary so the scan
+             * runs; the operator can NET OFF afterwards if they only wanted the
+             * list. The reply is always JSON (or ERR) so the host can parse it
+             * the same way it parses NET STATUS. */
+            char aps[512];
+            if (softap_cmd_scan(aps, sizeof(aps)))
+                reply_printf("NET %s\n", aps);
+            else
+                reply_text("ERR net_scan\n");
+            return;
+        } else if (!strncmp(arg, "AP ", 3) || !strcmp(arg, "AP")) {
+            /* "NET AP" with no suffix toggles on/off via saved state;
+             * "NET AP <suffix>" forces AP on with that suffix;
+             * "NET AP OFF" forces it off. The STA continues to run alongside
+             * — the relay keeps trying to join while the operator configures. */
+            const char *tail = !strcmp(arg, "AP") ? NULL : arg + 3;
+            bool enable = true;
+            if (tail && !strcmp(tail, "OFF")) enable = false;
+            else if (softap_running()) { reply_text("OK\n"); return; }
+            char *suffix = tail && enable ? tail : NULL;
+            if (softap_cmd_ap(enable, suffix))
+                reply_text("OK\n");
+            else
+                reply_text("ERR net_ap\n");
+            return;
         } else if (!strcmp(arg, "STATUS")) {
             /* The pass is deliberately absent: this reply goes to a log and to
              * whoever is watching the port. */
@@ -858,10 +943,47 @@ static void commands_task(void *arg) {
      * smaller buffer would lose the tail of a long command (USB and the UART
      * keep it in their drivers, the ring does not). */
     uint8_t buf[128];
+    printf("TASK start: sink=%d\n", (int)sink);
     for (;;) {
         int n = link_read_from(sink, buf, sizeof(buf), p->probe ? PROBE_QUIET_MS : 20);
+        if (n > 0) printf("TASK sink=%d read n=%d first=%c\n", (int)sink, n, buf[0] < 0x20 ? '.' : buf[0]);
         int64_t now = esp_timer_get_time();
         xSemaphoreTake(cmd_lock, portMAX_DELAY);
+#if RX_WIFI_RELAY
+        /* Relay 模式帧级预判断：LINK_WS 上收到的帧，除 relay 本地命令外
+         * 全部整帧透传到 UART (head)。
+         */
+        if (n > 0 && sink == LINK_WS) {
+            bool all_ascii = true;
+            for (int j = 0; j < n; j++) {
+                uint8_t c = buf[j];
+                if (c < 0x20 && c != '\n' && c != '\r') { all_ascii = false; break; }
+                if (c > 0x7E) { all_ascii = false; break; }
+            }
+            int cmd_start = 0;
+            while (cmd_start < n && (buf[cmd_start] == '\n' || buf[cmd_start] == '\r')) cmd_start++;
+            bool is_local = false;
+            if (all_ascii && cmd_start < n && (buf[cmd_start] >= 'A' && buf[cmd_start] <= 'Z')) {
+                /* Strip trailing \r/\n before relay_allowed — WS frames arrive
+                 * as one whole frame including the terminator. Save and restore
+                 * the stripped byte so the downstream line_byte loop still
+                 * sees the \n that triggers handle(). */
+                int cmd_end = n;
+                while (cmd_end > cmd_start && (buf[cmd_end-1] == '\n' || buf[cmd_end-1] == '\r'))
+                    cmd_end--;
+                uint8_t saved_term = (cmd_end < n) ? buf[cmd_end] : 0;
+                buf[cmd_end] = 0;
+                is_local = relay_allowed((char *)buf + cmd_start);
+                if (cmd_end < n) buf[cmd_end] = saved_term;
+            }
+            if (!is_local) {
+                printf("[CMD] relay→head uart_link_write %d bytes: %.64s\n", n, buf + cmd_start);
+                uart_link_write(buf, (size_t)n);
+                xSemaphoreGive(cmd_lock);
+                continue;
+            }
+        }
+#endif
         if (n <= 0) {
             if (p->probe) {
                 p->probe = false; /* also when the other port changed the protocol meanwhile */
@@ -879,6 +1001,7 @@ static void commands_task(void *arg) {
             xSemaphoreGive(cmd_lock);
             continue;
         }
+        if (n > 0) printf("  BYTELOOP sink=%d n=%d proto=%d\n", (int)sink, n, (int)proto);
         for (int i = 0; i < n; i++) {
             uint8_t b = buf[i];
             if (proto == PROTO_MONITOR) {
@@ -981,6 +1104,12 @@ void commands_task_start(void) {
      * not "RotorHazard came back", exactly as on USB. */
     if (link_ready(LINK_WS))
         xTaskCreatePinnedToCore(commands_task, "cmd_ws", 6144, (void *)(intptr_t)LINK_WS, 6, NULL,
+                                portNUM_PROCESSORS - 1);
+#endif
+#ifdef RX_W5500
+    /* Scanner-only: one TCP client at a time handles the ETH port. */
+    if (link_ready(LINK_ETH))
+        xTaskCreatePinnedToCore(commands_task, "cmd_eth", 6144, (void *)(intptr_t)LINK_ETH, 6, NULL,
                                 portNUM_PROCESSORS - 1);
 #endif
 }

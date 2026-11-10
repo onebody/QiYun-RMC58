@@ -20,3 +20,8 @@
 # Not exercised against a WPA3-only AP: every M1 run on real hardware used a
 # WPA2-PSK network, which still associates and uplinks with this layer in.
 CONFIG_ESP_WIFI_ENABLE_WPA3_SAE=y
+# SoftAP fallback: when STA cannot associate or serve.mjs cannot be reached
+# for long enough, bring up an AP for on-device re-provisioning.
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=y
+# We run both STA and SoftAP concurrently (AP starts while STA is still trying).
+CONFIG_ESP_WIFI_SOFTAP_BEACON_MAX_LEN=752

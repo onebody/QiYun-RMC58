@@ -13,6 +13,8 @@
  * spin that task. app_main calls this before it, idempotent. */
 esp_err_t ws_link_open(void);
 bool ws_link_start(const net_prefs_t *p); /* association + dial loop; idempotent */
+bool ws_link_register_events(void);       /* WiFi/IP event handlers, idempotent */
+void ws_link_reset_patience(void);        /* zero dial-task fallback counters (config-portal save) */
 bool ws_link_stop(void);                  /* down to the same state as NET OFF */
 bool ws_link_sta_up(void);                /* AP associated */
 bool ws_link_up(void);                    /* WS handshake completed */

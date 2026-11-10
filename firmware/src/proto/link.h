@@ -9,8 +9,13 @@
 /* Where replies go. Frames default to USB; link_set_frame_sink() may point
  * them at the UART, whose byte stream carries them fine (the 0xA5 sync would
  * only matter if RotorHazard listened on the same port, which it doesn't
- * while we own it). LINK_WS is the relay image's uplink. */
+ * while we own it). LINK_WS is the relay image's uplink. LINK_ETH is the
+ * W5500 SPI Ethernet TCP server (scanner images only, enabled via RX_W5500). */
+#ifdef RX_W5500
+typedef enum { LINK_USB = 0, LINK_UART, LINK_WS, LINK_ETH, LINK_COUNT } link_sink_t;
+#else
 typedef enum { LINK_USB = 0, LINK_UART, LINK_WS, LINK_COUNT } link_sink_t;
+#endif
 
 /* Which queue a frame of this type goes to. RAWIQ stays on USB whatever the
  * sink says: its chunks exceed the UART's TX ring and the WS frame size alike
@@ -24,6 +29,11 @@ void link_init(void);
 /* Create the USB sink's queue and writer task; uart_link.c owns the UART's
  * driver and writes straight to it. */
 void link_sink_start(size_t queue_bytes);
+#ifdef RX_W5500
+/* Create ETH uplink queue + task. Must be called AFTER scanner_init() has
+ * consumed its IQ-buffer heap, otherwise the C5 runs out of heap. */
+void link_eth_start(void);
+#endif
 /* Whether the sink was started (its transport is usable). */
 bool link_ready(link_sink_t sink);
 

@@ -9,6 +9,9 @@
 #include <unistd.h>
 
 #include "esp_event.h"
+#include "esp_heap_caps.h"
+#include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
@@ -17,8 +20,14 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "net_prefs.h"
+#include "softap.h"
 #include "ws_codec.h"
 #include "ws_link.h"
+#ifdef RX_WIFI_RELAY
+#include "status_led.h"
+#endif
+
+static const char *TAG = "ws_link";
 
 #define RX_RING_BYTES 1024 /* the inbound side carries ASCII commands only */
 #define RX_MAX_ITEM 128    /* one frame is one command line: commands.c's line
@@ -39,20 +48,26 @@ static SemaphoreHandle_t sock_mu;
 static RingbufHandle_t rx_ring;
 static TaskHandle_t dial_task;
 static net_prefs_t cfg;
-static bool netif_built;
+bool netif_built;   /* non-static — softap.c tears down/rebuilds */
+/* esp_wifi_init ran. Separate from netif_built because the netif is created
+ * first and the driver init can still fail: one flag for both meant a boot
+ * failure at esp_wifi_init left netif_built false, and the operator's `NET ON`
+ * then created the STA netif a second time - which asserts in wifi_default.c
+ * and reboots the relay (measured 2026-11-02). */
+bool wifi_inited;   /* non-static — softap.c deinits */
 /* join_ap() brought the driver up (mode, start, power save). Re-arming - NET
  * ON again, or with new credentials - must not run that a second time:
  * esp_wifi_start and esp_wifi_connect both answer an error when the station is
  * already where we want it, and a relay that reported ERR net_start at that
  * moment would be lying about a working link. */
-static bool driver_up;
+bool driver_up;
 static uint8_t out_frame[WS_MAX_FRAME + 16];
 static volatile bool sta_up;
 static volatile bool ws_up;
 static volatile bool want_up;
 static volatile uint32_t rx_drops;
 static uint32_t backoff_ms = BACKOFF_MIN_MS;
-static char why[40]; /* the last thing that happened, for NET STATUS */
+static char why[56]; /* the last thing that happened, for NET STATUS */
 /* The driver's own words about why the station is not up. M1's last run left
  * `sta:false` with `why:""` for minutes: on_wifi_event took `void *data` and
  * threw the disconnect reason away, and the dial task never wrote `why` while
@@ -69,6 +84,8 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
     (void)arg;
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         const wifi_event_sta_disconnected_t *d = (const wifi_event_sta_disconnected_t *)data;
+        printf("[EVT] STA_DISCONNECTED reason=%u want_up=%d sta_downs=%lu\n",
+               d ? (unsigned)d->reason : 0, (int)want_up, (unsigned long)sta_downs + 1);
         /* Only a link we still wanted is a failure. NET OFF clears want_up
          * before it disconnects, and this event follows that call: counting it
          * would leave the relay reporting a reason code for the thing the
@@ -76,61 +93,119 @@ static void on_wifi_event(void *arg, esp_event_base_t base, int32_t id, void *da
         if (want_up) {
             sta_reason = d ? d->reason : 0;
             sta_downs++;
+#ifdef RX_WIFI_RELAY
+            printf("[LED] SL_STA_CONNECTING (amber slow blink)\n");
+            status_led_set_state(SL_STA_CONNECTING);
+#endif
         }
         sta_up = false;
         /* Reconnection is the driver's own job: a second retry loop here would
          * keep interrupting it. want_up only gates it so NET OFF stays off. */
         if (want_up) esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
+        printf("[EVT] STA_GOT_IP\n");
         sta_up = true;
         sta_reason = 0; /* an association that worked is not a failure to explain */
+#ifdef RX_WIFI_RELAY
+        printf("[LED] SL_STA_GOT_IP (amber solid)\n");
+        status_led_set_state(SL_STA_GOT_IP);
+#endif
     } else {
         (void)data;
     }
 }
 
-static bool join_ap(void) {
+/* Every exit of join_ap names the IDF call that refused, because M1 collapsed
+ * all seven of them into "wifi_start" and the board then could not say which
+ * step it had failed at - the one thing L1.5 asks it for. The heap figure rides
+ * along because it is what separates ESP_ERR_NO_MEM from a state error without
+ * needing a second build. */
+static bool join_failed(char *bad, size_t badn, const char *step, esp_err_t e) {
+    snprintf(bad, badn, "%s %s heap=%u/%u", step, esp_err_to_name(e),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    return false;
+}
+
+static void on_wifi_event(void *arg, esp_event_base_t eb, int32_t id, void *data);
+static bool events_registered;
+
+/* Idempotent registration of the WiFi/IP event handlers. Called from
+ * ws_link_start (so the no-creds softAP path tracks events too) and from
+ * join_ap. Handlers live on the default event loop and survive
+ * esp_wifi_deinit/reinit, so one successful registration covers all later
+ * driver cycles. */
+bool ws_link_register_events(void) {
+    if (events_registered) return true;
+    /* Create the default loop if it doesn't exist yet; ESP_ERR_INVALID_STATE
+     * just means it already exists. */
+    esp_event_loop_create_default();
+    esp_err_t e1 = esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event, NULL, NULL);
+    esp_err_t e2 = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi_event, NULL, NULL);
+    if (e1 != ESP_OK || e2 != ESP_OK) return false;
+    events_registered = true;
+    return true;
+}
+
+static bool join_ap(char *bad, size_t badn) {
     if (!netif_built) {
         /* lwIP's TCP/IP task comes up with esp_netif_init, not with the netif
          * itself. Without it the station associates, DHCP sends its first
          * discover, and tcpip.c:257 asserts "Invalid mbox" - a reboot loop a
          * saved NET ON walks straight back into. Idempotent, so an image that
          * already ran it is unaffected. */
-        if (esp_netif_init() != ESP_OK) return false;
-        if (!esp_netif_create_default_wifi_sta()) return false;
+        esp_err_t e = esp_netif_init();
+        if (e != ESP_OK) return join_failed(bad, badn, "netif_init", e);
+        if (!esp_netif_create_default_wifi_sta()) return join_failed(bad, badn, "netif_sta", ESP_FAIL);
+        /* Up before anything that can still fail: from this line the netif
+         * exists, and creating it twice is the assert, not a retry. */
+        netif_built = true;
+    }
+    if (!wifi_inited) {
         /* The relay image never runs main.c's Wi-Fi bring-up, so the driver
          * init belongs here: esp_wifi_set_mode fails without it. RAM storage
          * keeps the driver from writing a second copy of our credentials. */
         const wifi_init_config_t mic = WIFI_INIT_CONFIG_DEFAULT();
-        if (esp_wifi_init(&mic) != ESP_OK) return false;
-        ESP_ERROR_CHECK(
-            esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, on_wifi_event, NULL, NULL));
-        ESP_ERROR_CHECK(
-            esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, on_wifi_event, NULL, NULL));
-        netif_built = true;
+        esp_err_t e = esp_wifi_init(&mic);
+        if (e != ESP_OK) return join_failed(bad, badn, "wifi_init", e);
+        wifi_inited = true;
     }
+    /* Event handlers must be registered on EVERY path — after a softAP
+     * round-trip wifi_inited is already true and this branch is skipped.
+     * Without them sta_up/GOT_IP are never tracked and dial_task tears
+     * down a freshly joined STA 10 s later ("STA down 10 s" → softAP). */
+    if (!ws_link_register_events()) return join_failed(bad, badn, "evt_reg", ESP_FAIL);
     /* RAM, not FLASH: our copy of the credentials is namespace "net", and the
      * driver would otherwise write a second one behind our back. */
-    if (esp_wifi_set_storage(WIFI_STORAGE_RAM) != ESP_OK) return false;
+    esp_err_t e = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (e != ESP_OK) return join_failed(bad, badn, "storage", e);
+    if (!driver_up) {
+        /* Bring the station mode up first — set_config refuses without a mode. */
+        e = esp_wifi_set_mode(WIFI_MODE_STA);
+        if (e != ESP_OK) return join_failed(bad, badn, "set_mode", e);
+        e = esp_wifi_start();
+        if (e != ESP_OK) return join_failed(bad, badn, "start", e);
+        e = esp_wifi_set_ps(WIFI_PS_NONE);
+        if (e != ESP_OK) return join_failed(bad, badn, "set_ps", e);
+        driver_up = true;
+    } else {
+        esp_wifi_disconnect();
+    }
+    /* Now the driver is in STA mode and running: we can configure SSID/PASS
+     * and attempt to connect. If there are no credentials, skip the connect
+     * step — dial_task_fn will bring up softAP instead. */
     wifi_config_t wc = {0};
     strlcpy((char *)wc.sta.ssid, cfg.ssid, sizeof(wc.sta.ssid));
     strlcpy((char *)wc.sta.password, cfg.pass, sizeof(wc.sta.password));
     wc.sta.threshold.authmode = cfg.pass[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
-    if (driver_up) {
-        /* A re-arm goes down before it goes up again: set_config refuses while
-         * a connection attempt is live (ESP_ERR_WIFI_STATE) and connect refuses
-         * once one is established. */
-        esp_wifi_disconnect();
+    e = esp_wifi_set_config(WIFI_IF_STA, &wc);
+    if (e != ESP_OK) return join_failed(bad, badn, "set_config", e);
+    if (!cfg.ssid[0]) {
+        /* Empty SSID — don't connect. Driver is up; dial_task brings AP. */
+        return true;
     }
-    if (esp_wifi_set_config(WIFI_IF_STA, &wc) != ESP_OK) return false;
-    if (driver_up) return esp_wifi_connect() == ESP_OK;
-    if (esp_wifi_set_mode(WIFI_MODE_STA) != ESP_OK) return false;
-    if (esp_wifi_start() != ESP_OK) return false;
-    /* Power save would sleep the station between frames, and a dial's command
-     * round-trip would then ride the beacon-interval wake-up latency. */
-    if (esp_wifi_set_ps(WIFI_PS_NONE) != ESP_OK) return false;
-    driver_up = true;
-    return esp_wifi_connect() == ESP_OK;
+    e = esp_wifi_connect();
+    return e == ESP_OK || join_failed(bad, badn, "connect", e);
 }
 
 /* recv() with the socket's SO_RCVTIMEO: fills n bytes, or returns false if the
@@ -191,6 +266,19 @@ static bool dial_and_handshake(const char *host, uint16_t port, const char *path
         return false;
     }
     freeaddrinfo(ai);
+
+    /* serve.mjs keys the node endpoint on ?id= (web/serve.mjs:471) and the
+     * setup page no longer collects one — the relay names itself after its
+     * MAC, the same suffix the softAP SSID carries. A URL that already has
+     * an id= keeps the operator's choice. */
+    char full_path[160];
+    if (!strstr(path, "id=")) {
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_IF_WIFI_STA);
+        snprintf(full_path, sizeof(full_path), "%s%sid=widscan58-%02x%02x%02x",
+                 path, strchr(path, '?') ? "&" : "?", mac[3], mac[4], mac[5]);
+        path = full_path;
+    }
 
     uint8_t raw[16];
     char key[25], want[29];
@@ -275,6 +363,8 @@ static bool dial_and_handshake(const char *host, uint16_t port, const char *path
 }
 
 static void take_down(const char *reason) {
+    printf("WS take_down reason='%s' ws_up=%d sock=%d\n",
+           reason ? reason : "?", ws_up, sock);
     xSemaphoreTake(sock_mu, portMAX_DELAY);
     ws_up = false;
     int fd = sock;
@@ -298,6 +388,7 @@ static bool skip_payload(int fd, size_t len) {
 static void serve_until_down(void) {
     int fd = sock;
     uint8_t hdr[10];
+    printf("WS serve_until_down START fd=%d\n", fd);
     for (;;) {
         if (!ws_up || !want_up) {
             /* This task owns the fd, and a stop must be the one to end the
@@ -329,6 +420,8 @@ static void serve_until_down(void) {
             return;
         }
         if (h.err == WS_BAD) {
+            printf("WS BAD frame: hdr=%02x %02x %02x %02x %02x %02x\n",
+                   hdr[0], hdr[1], hdr[2], hdr[3], hdr[4], hdr[5]);
             take_down("peer_frame");
             return;
         }
@@ -383,12 +476,43 @@ static void serve_until_down(void) {
         }
         uint8_t item[RX_MAX_ITEM];
         if (!read_fill(fd, item, h.len, 2000)) {
+            printf("WS read_fill failed len=%zu\n", h.len);
             take_down("peer_stall");
             return;
         }
-        /* Never block the socket on a slow command reader: drop instead. */
-        if (xRingbufferSend(rx_ring, item, h.len, 0) != pdTRUE) rx_drops++;
+        printf("WS rx op=%u len=%zu payload[0]=%c ok=%d\n",
+               (unsigned)h.opcode, h.len,
+               item[0] >= 0x20 && item[0] < 0x7F ? item[0] : '.',
+               xRingbufferSend(rx_ring, item, h.len, 0) == pdTRUE);
     }
+}
+
+/* AP fallback triggers:
+ *   - No STA for AP_TRIGGER_DOWN_MS (10 s) with saved creds → softAP.
+ *   - No saved creds at all → softAP right away (first boot).
+ *   - STA up but WS dial fails AP_TRIGGER_DIAL_CYCLES times at max backoff
+ *     → softAP (covers the "moved to new subnet" case). */
+#define AP_TRIGGER_DOWN_MS   10000
+#define AP_TRIGGER_DIAL_CYCLES 3   /* 3 × 30 s = 90 s of trying serve.mjs */
+
+/* The dial task's patience counters. File scope because ws_link_start (the
+ * POST handler's task, or a NET ON command) must zero them when the operator
+ * re-arms with fresh credentials: without the reset, the "STA down 10 s"
+ * trigger fired the moment the saved AP finished, racing softap_stop and
+ * leaving the device with no AP and no STA (measured 2026-11-09). */
+static volatile int sta_down_ms;      /* how long STA has been down, in ms */
+static volatile int dial_fail_cycles; /* consecutive dial failures at max backoff */
+
+/* Bring up softAP with a chip-suffixed SSID. Shared by all three fallback paths
+ * (first boot, STA down too long, dial exhausted). */
+static void bring_up_softap(const char *reason) {
+    char chip[12];
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_IF_WIFI_STA);
+    snprintf(chip, sizeof(chip), "%02x%02x%02x", mac[3], mac[4], mac[5]);
+    printf("SOFTAP bring up reason=%s chip=%s\n", reason ? reason : "?", chip);
+    ESP_LOGW(TAG, "%s — bringing up softAP", reason ? reason : "?");
+    softap_start_task(chip);
 }
 
 static void dial_task_fn(void *arg) {
@@ -396,29 +520,91 @@ static void dial_task_fn(void *arg) {
     char host[64], path[128];
     uint16_t port = 80;
     const char *bad = NULL;
+    bool ap_was_up = false;
+    printf("DIAL start want_up=%d ssid='%s' url='%s'\n", (int)want_up, cfg.ssid, cfg.url);
+
     for (;;) {
-        while (!want_up) vTaskDelay(pdMS_TO_TICKS(50));
+        while (!want_up) {
+            /* No credentials at all → softAP is the default state; don't
+             * wait for want_up, just drop through and start it. */
+            if (!cfg.ssid[0] || !cfg.url[0]) break;
+            sta_down_ms = 0;
+            dial_fail_cycles = 0;
+            backoff_ms = BACKOFF_MIN_MS;
+            if (softap_running()) { softap_stop(); ap_was_up = false; }
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+
+        /* ---- No credentials saved at all ----
+         * First boot: nothing to try, bring up AP right away. */
+        if (!cfg.ssid[0] || !cfg.url[0]) {
+            if (!softap_running()) {
+                printf("DIAL no creds → bring_up_softap\n");
+                /* tiny delay so the STA driver has a chance to confirm there is
+                 * nothing configured to associate with */
+                vTaskDelay(pdMS_TO_TICKS(1500));
+                if (!sta_up) bring_up_softap("no credentials saved");
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+
+        /* ---- STA cannot associate (wrong SSID, wrong password, out of range) ---- */
         if (!sta_up) {
-            /* `why` is the dial loop's field, and the dial loop never ran: say
-             * so instead of leaving an empty string that reads like "fine".
-             * Only the first pass writes it - sta_reason carries the detail. */
             if (!why[0]) set_why("no_ip");
+            dial_fail_cycles = 0; /* STA is not up yet, dial cannot count */
+            sta_down_ms += 200;
+            if (sta_down_ms >= AP_TRIGGER_DOWN_MS && !softap_running())
+                bring_up_softap("STA down 10 s");
             vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
+
+        /* ---- STA has IP. Reset patience, tear AP down. ---- */
+        sta_down_ms = 0;
+        if (ap_was_up) {
+            softap_stop();
+            ap_was_up = false;
+        }
+
         if (!ws_parse_url(cfg.url, host, sizeof(host), &port, path, sizeof(path), &bad)) {
-            /* A bad URL will not fix itself: stand down until NET SET. */
             set_why(bad ? bad : "url");
             want_up = false;
             continue;
         }
+
+        /* ---- Try to reach serve.mjs ---- */
+#ifdef RX_WIFI_RELAY
+        printf("[LED] SL_WS_CONNECTING (green fast blink)\n");
+        status_led_set_state(SL_WS_CONNECTING);
+#endif
         if (!dial_and_handshake(host, port, path)) {
+            set_why("dial");
+            if (backoff_ms >= BACKOFF_MAX_MS) {
+                dial_fail_cycles++;
+                if (dial_fail_cycles >= AP_TRIGGER_DIAL_CYCLES && !softap_running()) {
+#ifdef RX_WIFI_RELAY
+                    printf("[LED] SL_ERROR_RED (red fast blink — all paths exhausted)\n");
+                    status_led_set_state(SL_ERROR_RED);
+#endif
+                    bring_up_softap("WS dial exhausted");
+                }
+            } else {
+                dial_fail_cycles = 0; /* give up early — not yet "tried hard" */
+            }
             vTaskDelay(pdMS_TO_TICKS(backoff_ms));
             backoff_ms = backoff_ms * 2 > BACKOFF_MAX_MS ? BACKOFF_MAX_MS : backoff_ms * 2;
             continue;
         }
+
+        /* ---- Finally connected. ---- */
+        dial_fail_cycles = 0;
         backoff_ms = BACKOFF_MIN_MS;
         ws_up = true;
+#ifdef RX_WIFI_RELAY
+        printf("[LED] SL_WS_OK (green solid — relay healthy)\n");
+        status_led_set_state(SL_WS_OK);
+#endif
         set_why("up");
         serve_until_down();
     }
@@ -431,17 +617,55 @@ esp_err_t ws_link_open(void) {
 }
 
 bool ws_link_start(const net_prefs_t *p) {
-    if (!p || !p->ssid[0] || !p->url[0]) return false;
-    if (want_up && !memcmp(&cfg, p, sizeof(cfg))) return true; /* armed with these already */
+    char bad[56];
+    bad[0] = 0;
+    if (!p) return false;
+    printf("WS_START ssid='%s' url='%s' on=%d\n", p->ssid, p->url, (int)p->on);
+    /* Same credentials AND the STA is healthy: nothing to redo. If the STA is
+     * down (failed association), fall through and re-arm — a re-save with the
+     * same SSID must still get a fresh patience window below, or the dial
+     * task fires its stale "STA down 10 s" trigger during the save handoff. */
+    if (want_up && sta_up && !memcmp(&cfg, p, sizeof(cfg))) return true;
     if (ws_link_open() != ESP_OK) return false;
+    /* Track WiFi/IP events on every path — including the no-creds softAP one.
+     * Without this, after a softAP round-trip (softap_start inits the driver,
+     * so join_ap's init branch never runs) the handlers were never registered
+     * and dial_task saw the freshly joined STA as "down" and tore it back
+     * down 10 s later. */
+    ws_link_register_events();
     cfg = *p;
+    /* Fresh credentials get a fresh patience window: the dial task's "STA
+     * down 10 s" counter may already be past the trigger from the previous
+     * (failed) credentials, and firing it during the save handoff raced
+     * softap_stop — AP and STA both lost (measured 2026-11-09). */
+    sta_down_ms = 0;
+    dial_fail_cycles = 0;
+    backoff_ms = BACKOFF_MIN_MS;
     if (!dial_task && xTaskCreate(dial_task_fn, "ws_dial", 6144, NULL, 5, &dial_task) != pdPASS) return false;
-    if (!join_ap()) {
-        set_why("wifi_start");
-        return false;
+    if (!cfg.ssid[0]) {
+        /* No credentials: dial_task_fn will init softAP directly.
+         * We deliberately skip join_ap — its STA-mode configs can break
+         * softAP beaconing on ESP32-S3. */
+        printf("WS_START: no creds, deferring WiFi init to dial_task\n");
+        return true;
     }
-    want_up = true;
+    if (!join_ap(bad, sizeof(bad))) {
+        set_why(bad[0] ? bad : "wifi_start");
+    } else {
+        want_up = true;
+    }
+    printf("WS_START → want_up=%d\n", (int)want_up);
     return true;
+}
+
+/* Zero the dial task's fallback patience counters. The config-portal POST
+ * handler calls this BEFORE softap_stop: while the stop window is open the
+ * dial task's stale "STA down 10 s" counter would otherwise fire
+ * bring_up_softap mid-handoff (measured 2026-11-09). */
+void ws_link_reset_patience(void) {
+    sta_down_ms = 0;
+    dial_fail_cycles = 0;
+    backoff_ms = BACKOFF_MIN_MS;
 }
 
 bool ws_link_stop(void) {
@@ -501,11 +725,24 @@ uint32_t ws_link_drops(void) {
 void ws_link_status(char *out, size_t cap) {
     wifi_ap_record_t ap;
     int rssi = esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
+    /* The address the station holds and what its DHCP client claims to be doing.
+     * "no_ip" alone could not tell a lease that never arrived from one that
+     * arrived and never reached the dial task - and on 2026-11-02 the relay was
+     * associated and answering ARP while it reported exactly that. */
+    char ip[16] = "none";
+    const char *dhcp = "none";
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    esp_netif_ip_info_t ii = {0};
+    if (sta && esp_netif_get_ip_info(sta, &ii) == ESP_OK && ii.ip.addr)
+        snprintf(ip, sizeof(ip), IPSTR, IP2STR(&ii.ip));
+    esp_netif_dhcp_status_t ds = ESP_NETIF_DHCP_STOPPED;
+    if (sta && esp_netif_dhcpc_get_status(sta, &ds) == ESP_OK)
+        dhcp = ds == ESP_NETIF_DHCP_STARTED ? "started" : ds == ESP_NETIF_DHCP_INIT ? "init" : "stopped";
     /* A JSON fragment, not a kv line: NET STATUS hands this straight to the
      * platform, and every field there is a field. why is our own literal. */
     snprintf(out, cap, "\"sta\":%s,\"ws\":%s,\"rssi\":%d,\"backoff_ms\":%" PRIu32
                     ",\"in_drops\":%" PRIu32 ",\"why\":\"%s\",\"sta_reason\":%" PRIu8
-                    ",\"sta_downs\":%" PRIu32,
+                    ",\"sta_downs\":%" PRIu32 ",\"ip4\":\"%s\",\"dhcp\":\"%s\"",
              sta_up ? "true" : "false", ws_up ? "true" : "false", rssi, backoff_ms, rx_drops, why,
-             sta_reason, sta_downs);
+             sta_reason, sta_downs, ip, dhcp);
 }

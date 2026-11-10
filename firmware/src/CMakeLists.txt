@@ -20,8 +20,13 @@ set(includes "." "radio" "dsp" "scan" "proto" "net")
 # object, so this is the isolation gate Task 6 Step 4 checks with `find`.
 # The -D form is accepted too, for a PlatformIO that does not propagate ENV.
 if(DEFINED ENV{WIDSCAN_RELAY} OR WIDSCAN_RELAY)
-    list(APPEND sources "net/ws_codec.c" "net/ws_link.c" "net/net_prefs.c" "net/relay_pipe.c")
+    list(APPEND sources "net/ws_codec.c" "net/ws_link.c" "net/net_prefs.c" "net/relay_pipe.c" "net/softap.c")
 endif()
+# ETH (W5500 SPI + TCP server). Source files are always compiled; they wrap
+# their content in `#ifdef RX_W5500` so a build without that flag carries no
+# extra code. The bit-bang SPI (bb_spi.c) avoids esp_driver_spi's BSS pool
+# that trips the C5's RF-dump-bank guard — see CMakeLists.txt REQUIRES list.
+list(APPEND sources "net/bb_spi.c" "net/eth_w5500.c" "net/eth_server.c")
 message(STATUS "widscan58 relay=${WIDSCAN_RELAY} env=$ENV{WIDSCAN_RELAY}")
 
 if(IDF_TARGET STREQUAL "esp32s3")
@@ -44,10 +49,11 @@ endif()
 idf_component_register(SRCS ${sources}
     INCLUDE_DIRS ${includes}
     LDFRAGMENTS ${ldfragments}
+    # esp_driver_spi is deliberately absent — eth_w5500.c uses a GPIO
+    # bit-bang SPI (bb_spi.c) because the full SPI master driver pulls a
+    # DMA-desc + queue pool that exceeds the C5's RF-dump-bank BSS ceiling.
     REQUIRES esp_app_format esp_driver_gpio esp_driver_rmt esp_driver_uart esp_driver_usb_serial_jtag esp_wifi esp_phy esp_timer esp_hw_support
              nvs_flash esp_rom espressif__esp-dsp
-             # esp_wifi already requires these, so the scanner images link the
-             # same objects; the relay's sockets need them named for its use.
              esp_event esp_netif lwip)
 
 # For INFO only, so a new commit recompiles just commands.c (FW_COMMIT_DATE is
