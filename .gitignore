@@ -33,3 +33,6 @@ firmware/build/
 firmware/dist/
 firmware/sdkconfig
 firmware/*.bak
+
+# 回归测试金样本：录制格式虽为 *.widscan58，但作为测试夹具需要入库
+!tests/fixtures/*.widscan58
