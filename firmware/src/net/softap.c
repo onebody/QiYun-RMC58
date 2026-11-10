@@ -462,8 +462,8 @@ static int hexval(char c) {
 /* application/x-www-form-urlencoded decode, in place: %XX sequences and
  * '+' → space. Runs AFTER the key/value split, so an encoded '&' or '='
  * inside a value can no longer confuse the parser. Without this, a server
- * address typed as "192.168.8.156:8080" reached NVS as
- * "192.168.8.156%3A8080" and DNS resolution failed forever. */
+ * address typed as "192.168.1.156:8080" reached NVS as
+ * "192.168.1.156%3A8080" and DNS resolution failed forever. */
 static void url_decode(char *s) {
     char *o = s;
     for (char *p = s; *p; ) {

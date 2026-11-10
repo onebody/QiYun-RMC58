@@ -38,7 +38,7 @@
 - [x] **Step 1：确认工作树干净、串口空闲**
 
 ```bash
-cd /Users/fcj/workspace/FPV_space/widscan58-clone/repo && git status --short && ls /dev/cu.usbmodem*
+cd ~/workspace/FPV_space/widscan58-clone/repo && git status --short && ls /dev/cu.usbmodem*
 ```
 Expected: `?? docs/superpowers/`（两份未入库的设计文档）之外无改动。`?? docs/C5-S3-*ChatGPT采集.md` 这类采集件**永远不 commit**。
 
