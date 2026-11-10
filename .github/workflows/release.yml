@@ -1,0 +1,145 @@
+name: Firmware Release
+
+# Triggered by git tag matching v*, e.g. git tag v1.2.3 && git push origin v1.2.3
+on:
+  push:
+    tags:
+      - 'v*'
+  # Also available via Actions tab "Run workflow" button (enter version).
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (default: auto from git tag)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write   # needed to create GitHub Release + upload assets
+
+jobs:
+  build-firmware:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { env: esp32c5,       label: C5-scanner,          chip: ESP32-C5 }
+          - { env: esp32c5-head,  label: C5-head,             chip: ESP32-C5 }
+          - { env: esp32c5-eth,   label: C5-scanner-W5500,    chip: ESP32-C5 }
+          - { env: esp32s3,       label: S3-relay-standalone, chip: ESP32-S3 }
+          - { env: esp32s3-relay, label: S3-relay,            chip: ESP32-S3 }
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PlatformIO Core
+        run: pip install --upgrade platformio
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: |
+            ${{ runner.os }}-pio-
+
+      - name: Determine version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          VER="$INPUT_VERSION"
+          if [ -z "$VER" ]; then
+            VER="${GITHUB_REF_NAME#refs/tags/}"
+          fi
+          case "$VER" in
+            v[0-9]*) : ;;
+            *) if [ -z "$VER" ]; then VER="$(git describe --tags --always --dirty)"; fi
+               if [[ "$VER" != v* ]]; then VER="v${VER}"; fi ;;
+          esac
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Building firmware version $VER for ${{ matrix.label }}"
+
+      - name: Build ${{ matrix.label }} (${{ matrix.env }})
+        working-directory: firmware
+        run: pio run -e ${{ matrix.env }}
+
+      - name: Rename artifact
+        id: rename
+        env:
+          VER: ${{ steps.version.outputs.version }}
+        run: |
+          SRC="firmware/.pio/build/${{ matrix.env }}/firmware.factory.bin"
+          DST="${GITHUB_WORKSPACE}/QiYun-RMC58_${{ matrix.label }}_${VER}_firmware.factory.bin"
+          cp "$SRC" "$DST"
+          echo "artifact=$DST" >> "$GITHUB_OUTPUT"
+          ls -lh "$DST"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.env }}
+          path: ${{ steps.rename.outputs.artifact }}
+          retention-days: 7
+
+  # Release job — runs after all builds succeed
+  release:
+    needs: build-firmware
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+          pattern: firmware-*
+          merge-multiple: true
+
+      - name: Compute SHA256 checksums
+        run: |
+          cd dist/
+          shasum -a 256 *.bin > sha256sums.txt
+          cat sha256sums.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: QiYun-RMC58 Firmware ${{ github.ref_name }}
+          body: |
+            ## 骑云射频监测平台 固件发布 ${{ github.ref_name }}
+
+            ### 包含的固件
+
+            | 文件名 | 目标板 | 用途 |
+            |:-------|:-------|:-----|
+            | `QiYun-RMC58_C5-scanner_*.bin` | XIAO ESP32-C5 | 扫描器（USB 直连 PC） |
+            | `QiYun-RMC58_C5-head_*.bin` | XIAO ESP32-C5 | 扫描头（UART 连 S3 relay，921600） |
+            | `QiYun-RMC58_C5-scanner-W5500_*.bin` | XIAO ESP32-C5 + W5500 | 扫描器（W5500 SPI 以太网 TCP server，端口 12345） |
+            | `QiYun-RMC58_S3-relay_*.bin` | ESP32-S3 | Relay（C5 扫描头通过 UART 921600 接入） |
+            | `QiYun-RMC58_S3-relay-standalone_*.bin` | ESP32-S3 | S3 独立扫描器（仅 USB/WiFi，无 C5 relay） |
+
+            ### SHA256 校验
+
+            完整校验见 `sha256sums.txt` 附件。
+
+            ### 烧录方法
+
+            ```bash
+            # 安装 PlatformIO CLI（或用 PlatformIO IDE）
+            pip install platformio
+
+            # 烧录示例
+            esptool.py --chip esp32c5 --port /dev/cu.usbmodemXXXX \
+              write_flash 0x0 QiYun-RMC58_C5-scanner_${{ github.ref_name }}_firmware.factory.bin
+            ```
+
+          files: |
+            dist/*.bin
+            dist/sha256sums.txt
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
