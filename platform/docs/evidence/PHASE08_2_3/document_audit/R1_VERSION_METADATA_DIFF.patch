@@ -1,0 +1,299 @@
+# Phase 08.2.3 R1 — 版本元数据修改前后差异（unified diff）
+# 生成时间：2026-11-05；基线：/tmp/p0823r1_before（R1 前原文档快照）
+
+--- /tmp/p0823r1_before/PHASE08_2_3_ACCEPTANCE_TEST_PLAN.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_ACCEPTANCE_TEST_PLAN.md	2026-11-05 15:14:41
+@@ -5,6 +5,11 @@
+ > 性质：**测试方案设计；未执行任何用例**
+ > 状态：**PROPOSED（待人工审批）**
+ > 日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批；0 条用例已执行）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前无可靠版本记录
+ > 证据目录（预留）：`docs/evidence/PHASE08_2_3/`
+ 
+ ---
+--- /tmp/p0823r1_before/PHASE08_2_3_ARCHITECTURE_CHANGE_IMPACT.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_ARCHITECTURE_CHANGE_IMPACT.md	2026-11-05 15:14:39
+@@ -5,6 +5,11 @@
+ > 性质：**影响分析，不改变任何既有决策的审批状态**
+ > 状态：**PROPOSED（待人工审批）**
+ > 日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前无可靠版本记录
+ 
+ ---
+ 
+--- /tmp/p0823r1_before/PHASE08_2_3_CAPACITY_AND_PERFORMANCE.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_CAPACITY_AND_PERFORMANCE.md	2026-11-05 15:14:37
+@@ -5,6 +5,11 @@
+ > 性质：**推导分析；没有真实压测基准**
+ > 状态：**PROPOSED（待人工审批 / 待实测）**
+ > 日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批 / 待实测）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前无可靠版本记录
+ 
+ ---
+ 
+--- /tmp/p0823r1_before/PHASE08_2_3_DECISION_REGISTER.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_DECISION_REGISTER.md	2026-11-05 15:14:44
+@@ -4,6 +4,12 @@
+ > 阶段：Phase 08.2.3 — 交付文档 ⑩
+ > 性质：**决策登记；所有新增决策均为 PROPOSED，未获批准**
+ > 日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Status**: PROPOSED（待人工审批）
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前无可靠版本记录
+ 
+ ---
+ 
+--- /tmp/p0823r1_before/PHASE08_2_3_FINAL_CLOSURE_REPORT.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_FINAL_CLOSURE_REPORT.md	2026-11-05 15:20:44
+@@ -3,8 +3,13 @@
+ > 项目：QiYun / widscan58
+ > 阶段：Phase 08.2.3 — RF Product Requirements & Architecture Rebaseline
+ > 文档类型：阶段收口与审计报告
+-> 文档版本：v1.0
++> 文档版本：1.0.1
+ > 生成日期：2026-11-05
++> **Version**: 1.0.1
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前仅记为 v1.0，无版本历史记录；1.0.1 (2026-11-05) 追加 §10 R1 对账更新
+ > 审计人：独立技术审计（AI 辅助）
+ > 文档状态：**PROPOSED（待人工审批）**
+ > 阶段判定：**CONDITIONAL PASS**
+@@ -167,3 +172,20 @@
+ | 固件 | `repo/firmware/src/net/`、`src/scan/profile.h`、`sdkconfig*` |
+ | Agent | `gateway-agent/src/widscan_agent/` |
+ | Site Server | `site-server/src/widscan_site/` |
++
++---
++
++## 10. R1 对账更新（2026-11-05，Version 1.0.1）
++
++> 本节只追加，不改写 §1–§9 的原始审计结论；最终判定仍为 **CONDITIONAL PASS**。
++
++| 遗留项 | 原状态 | R1 处理动作 | 当前处理结果 |
++|---|---|---|---|
++| C-01 阶段编号冲突 | 已记录、未解决 | 完成历史文档清单、时间线、分类；给出 A/B/C 三方案与推荐（方案 C） | **BLOCKED — 待人工裁定** |
++| C-02 版本元数据缺失 | 15 份无独立版本 | 全部补入 `Version/Created/Last Modified/Baseline/Version History` | **PASS（可追溯）** |
++| C-03 证据目录缺失 | NOT_FOUND | 建立 6 个子目录、`README.md`、`document_audit/INDEX.md`、`code_audit/INDEX.md` | **PASS（结构）；内容 EMPTY / NOT VERIFIED** |
++
++- 详细对账：`docs/PHASE08_2_3_R1_HISTORICAL_RECONCILIATION.md`
++- 版本审计：`docs/PHASE08_2_3_R1_VERSION_AUDIT.md`
++- 统一索引：`docs/PHASE_STATUS_INDEX.md`
++- 未变更：A1–A10 仍全部待人工审批；三份 08.2.1 ADR 与十二份 08.2.2 ADR 仍为 `PROPOSED`；未启动 Phase 08.3、08.2.4 审计执行或 SP-00–SP-17。
+--- /tmp/p0823r1_before/PHASE08_2_3_FINAL_TRACEABILITY.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_FINAL_TRACEABILITY.md	2026-11-05 15:20:52
+@@ -1,8 +1,13 @@
+ # Phase 08.2.3 — 最终追踪矩阵（需求 → 架构 → ADR → 数据模型 → API → UI → 测试 → 验收）
+ 
+ > 项目：QiYun / widscan58
+-> 文档版本：v1.0
++> 文档版本：1.0.1
+ > 生成日期：2026-11-05
++> **Version**: 1.0.1
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前仅记为 v1.0，无版本历史记录；1.0.1 (2026-11-05) 追加 §8 R1 对账注记
+ > 文档状态：**PROPOSED（待人工审批）**
+ > 前置：十份 08.2.3 交付物、08.2.1 ADR、08.2.2 安全 ADR、SP 矩阵
+ 
+@@ -150,3 +155,15 @@
+ - 标 `EXISTING` 的 4 条（NODE-005、UI-008、DQ-002、DQ-003）有代码证据。
+ - 标 `GAP` 的条目**不代表已实现**。
+ - 本矩阵不改变任何 ADR/SP/审批状态。
++
++---
++
++## 8. R1 对账注记（2026-11-05，Version 1.0.1）
++
++> 本节只追加，不修改 §1–§7 的任何映射与结论。
++
++1. **阶段编号歧义影响 Gate 字段**：本文件“Gate”列的 `08.3` 指 RF 新路线下的 UI 阶段，而非历史平台 UI 的 `PHASE08_3_UI_DESIGN_SYSTEM.md`。两者同名不同义，C-01 未裁定前不得互相引用作为完成证据。
++2. **历史文档不得作为 RF 需求的实现证据**：08.4 平台 UI 代码存在，但不实现任何 `RF-001–009` 接口；08.5 的 CONDITIONAL PASS 不覆盖 RF 数据。
++3. **编号与状态以统一索引为准**：`docs/PHASE_STATUS_INDEX.md` 登记真实状态；本矩阵只做需求映射。
++4. **39 条需求映射数量不变**；C-02（版本元数据）与 C-03（证据目录）不改变任何 GAP 判定。
++5. 未启动 Phase 08.3、08.2.4 审计执行或 SP-00–SP-17；未修改任何 ADR 审批状态。
+--- /tmp/p0823r1_before/PHASE08_2_3_HUMAN_APPROVAL_REGISTER.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_HUMAN_APPROVAL_REGISTER.md	2026-11-05 15:15:10
+@@ -1,8 +1,13 @@
+ # Phase 08.2.3 — 人工审批登记册（Human Approval Register）
+ 
+ > 项目：QiYun / widscan58
+-> 文档版本：v1.0
++> 文档版本：1.0.0
+ > 生成日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前仅记为 v1.0，无版本历史记录
+ > 文档状态：**PROPOSED（待人工审批）**
+ > 重要声明：本登记册**不包含任何自动批准**。所有审批结果栏保持 `PENDING`，仅可由人工填写。
+ 
+--- /tmp/p0823r1_before/PHASE08_2_3_NODE_ACCESS_ARCHITECTURE.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_NODE_ACCESS_ARCHITECTURE.md	2026-11-05 15:14:25
+@@ -5,6 +5,11 @@
+ > 性质：**设计文档，不修改任何代码、固件或冻结协议**
+ > 状态：**PROPOSED（待人工审批）**
+ > 日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前无可靠版本记录
+ 
+ ---
+ 
+--- /tmp/p0823r1_before/PHASE08_2_3_PROJECT_FREEZE_AND_GATES.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_PROJECT_FREEZE_AND_GATES.md	2026-11-05 15:20:48
+@@ -1,8 +1,13 @@
+ # Phase 08.2.3 — 项目冻结边界与阶段门禁
+ 
+ > 项目：QiYun / widscan58
+-> 文档版本：v1.0
++> 文档版本：1.0.1
+ > 生成日期：2026-11-05
++> **Version**: 1.0.1
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前仅记为 v1.0，无版本历史记录；1.0.1 (2026-11-05) 追加 §8 R1 对账更新
+ > 文档状态：**PROPOSED（待人工审批）**
+ > 适用：Phase 08.2.3 收口至 Phase 08.3 启动之前
+ 
+@@ -174,3 +179,32 @@
+ 6. 本轮未改变任何 ADR 审批状态。
+ 7. 本轮未改变 `/app/` 与 `/platform/` 运行行为。
+ 8. 本轮仅新增 5 份收口文档。
++
++---
++
++## 8. R1 对账更新（2026-11-05，Version 1.0.1）
++
++> 本节只追加；不改变 §4/§5/§6/§7 的冻结与门禁定义。
++
++### 8.1 C-01 编号方案对齐
++
++§4.1 的“方案甲/乙/丙”已在 R1 中规范化命名为 A/B/C：
++
++| R1 方案 | 内容 | 推荐 |
++|---|---|---|
++| A 保留历史编号 | 旧 08.3–08.5 不动；RF 新编号独立（如 RF-1..RF-4） | 备选 |
++| B 历史阶段归档 | 旧文档移入 archive 并标记历史 | 不推荐（无 Git，移动削弱证据） |
++| **C 统一阶段映射** | 不改名、不移动；以 `docs/PHASE_STATUS_INDEX.md` 登记旧/新编号与有效性 | **推荐** |
++
++**G6（阶段编号裁定）仍为 BLOCKED**：推荐不等于批准，仍需人工选择 A/B/C 并书面记录。
++
++### 8.2 C-02 / C-03 处理状态
++
++| 项 | 处理 | 门禁影响 |
++|---|---|---|
++| C-02 | 15 份文档已补统一版本元数据 | 不解除任何门禁；仅改善可追溯性 |
++| C-03 | 证据目录已建，内容为空 | 不解除 G2/G4/G8；`test_results/`、`hardware/` 仍 **EMPTY / NOT VERIFIED** |
++
++### 8.3 冻结边界不变
++
++R1 期间未修改产品代码/数据库/固件/协议/REST/WebSocket/前端；未执行迁移；未改 ADR 审批状态；未启动 Phase 08.3、08.2.4 审计执行或 SP-00–SP-17。
+--- /tmp/p0823r1_before/PHASE08_2_3_REQUIREMENTS_TRACEABILITY_MATRIX.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_REQUIREMENTS_TRACEABILITY_MATRIX.md	2026-11-05 15:14:42
+@@ -5,6 +5,11 @@
+ > 性质：**追踪矩阵，不修改代码**
+ > 状态：**PROPOSED（待人工审批）**
+ > 日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前无可靠版本记录
+ 
+ ---
+ 
+--- /tmp/p0823r1_before/PHASE08_2_3_RF_ANALYSIS_API_DESIGN.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_RF_ANALYSIS_API_DESIGN.md	2026-11-05 15:14:29
+@@ -5,6 +5,11 @@
+ > 性质：**接口设计，不实现、不注册路由、不修改现有 REST**
+ > 状态：**PROPOSED（待人工审批）**
+ > 日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前无可靠版本记录
+ 
+ ---
+ 
+--- /tmp/p0823r1_before/PHASE08_2_3_RF_DATA_MODEL.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_RF_DATA_MODEL.md	2026-11-05 15:14:27
+@@ -5,6 +5,11 @@
+ > 性质：**数据模型设计，不创建表、不写迁移、不修改数据库**
+ > 状态：**PROPOSED（待人工审批）**
+ > 日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前无可靠版本记录
+ 
+ ---
+ 
+--- /tmp/p0823r1_before/PHASE08_2_3_RF_PRODUCT_REQUIREMENTS.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_RF_PRODUCT_REQUIREMENTS.md	2026-11-05 15:14:24
+@@ -5,6 +5,11 @@
+ > 性质：产品需求与架构设计文档，**不代表已实现能力**
+ > 状态：**PROPOSED（待人工审批）**
+ > 日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前无可靠版本记录
+ > 约束：本阶段不修改产品代码、数据库、REST API、WebSocket、设备通信协议、固件、RF Console
+ 
+ ---
+--- /tmp/p0823r1_before/PHASE08_2_3_RF_WORKBENCH_IA.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_3_RF_WORKBENCH_IA.md	2026-11-05 15:14:31
+@@ -5,6 +5,11 @@
+ > 性质：**信息架构与页面设计，不修改前端代码**
+ > 状态：**PROPOSED（待人工审批）**
+ > 日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（待人工审批）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前无可靠版本记录
+ 
+ ---
+ 
+--- /tmp/p0823r1_before/PHASE08_2_4_RF_FIRMWARE_AUDIT_CHARTER.md	2026-11-05 15:13:09
++++ ~/workspace/FPV_space/widscan58-clone/docs/PHASE08_2_4_RF_FIRMWARE_AUDIT_CHARTER.md	2026-11-05 15:15:14
+@@ -1,8 +1,13 @@
+ # Phase 08.2.4 — RF Node 固件与硬件能力审计立项建议书
+ 
+ > 项目：QiYun / widscan58
+-> 文档版本：v1.0
++> 文档版本：1.0.0
+ > 生成日期：2026-11-05
++> **Version**: 1.0.0
++> **Created**: 2026-11-05
++> **Last Modified**: 2026-11-05
++> **Baseline**: NO — 未纳入正式有效基线（仅为立项建议书）
++> **Version History**: 1.0.0 (2026-11-05) 建立版本元数据（R1 规范化）；此前仅记为 v1.0，无版本历史记录
+ > 文档状态：**PROPOSED（仅为立项建议书）**
+ > 重要声明：**本文件不代表固件开发已批准或已启动。**
+ > 前置：A8 人工审批、A3/A4 语义确认

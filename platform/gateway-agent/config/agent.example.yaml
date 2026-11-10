@@ -1,0 +1,31 @@
+agent:
+  id: gateway-001
+  log_level: INFO
+
+api:
+  host: 127.0.0.1
+  port: 8765
+  # Phase 07.1：本地命令 API 认证（生产必须保持 true）
+  # Token 推荐通过环境变量注入：GATEWAY_API_TOKEN=...
+  # 不要在 YAML 中提交明文 Token；未配置 Token 时命令 API 返回 503。
+  require_auth: true
+  # api_token: ""   # 留空并从环境变量注入
+
+discovery:
+  usb_enabled: true
+  poll_interval: 5.0
+
+transport:
+  baudrate: 921600
+  read_timeout: 0.2
+
+reconnect:
+  enabled: true
+  initial_delay: 1.0
+  max_delay: 60.0
+  multiplier: 2.0
+
+stream:
+  queue_size: 1024
+  rawiq_enabled: false
+  max_websocket_queue: 2048

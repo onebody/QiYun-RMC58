@@ -1,0 +1,24 @@
+agent:
+  id: site-001
+  name: WIDSCAN58 Site
+  timezone: Asia/Shanghai
+
+api:
+  host: 0.0.0.0
+  port: 8766
+
+database:
+  url: sqlite:///./data/site.db
+  echo: false
+
+pairing:
+  code_ttl_seconds: 300
+  max_active_codes: 5
+  credential_ttl_hours: 720
+
+retention:
+  metrics_hours: 24
+  telemetry_hours: 48
+  spectrum_hours: 6
+  levels_hours: 12
+  rawiq_enabled: false

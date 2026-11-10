@@ -1,0 +1,295 @@
+{
+  "test_id": "PHASE08_2_4_HW",
+  "timestamp": "2026-11-06 00:17:41",
+  "boards": {
+    "esp32c5_head": {
+      "port": "/dev/cu.usbmodem1201",
+      "env": "esp32c5-head",
+      "baud_gpio": 921600,
+      "frame_sink": "LINK_UART",
+      "firmware": "rftrack-baseline-v0.1.0-65-gc54"
+    },
+    "esp32s3_relay": {
+      "port": "/dev/cu.usbmodem1301",
+      "env": "esp32s3-relay",
+      "baud_gpio": 921600,
+      "firmware": "rftrack-baseline-v0.1.0-65-gc54"
+    }
+  },
+  "uart_wiring": {
+    "c5_gpio11_tx": "s3_gpio44_rx",
+    "c5_gpio12_rx": "s3_gpio43_tx",
+    "gnd_gnd": true
+  },
+  "test01": {
+    "name": "C5 single-node RF scan",
+    "result": "PASS",
+    "details": "310 Hz ± 0.2 Hz, 15 enabled, GROUP mode, 4 LOs covering 8 channels, 0 drifts, 0 reboots"
+  },
+  "test02": {
+    "name": "S3 relay UART pipe + WS uplink",
+    "result": "CONDITIONAL PASS",
+    "uart_pipe": {
+      "result": "PASS",
+      "head_ready": true,
+      "head_baud": 921600,
+      "rate_avg_kbps": 36.09,
+      "rate_expected_kbps": 36.6,
+      "rate_ratio": 0.99,
+      "stability": "0 reboots, constant rate 5 min"
+    },
+    "ws_uplink": {
+      "result": "BLOCKED_ENVIRONMENTAL",
+      "sta": true,
+      "sta_ip": "203.0.113.119",
+      "sta_rssi": -43,
+      "connect_attempts": "why:\"connect\" — TCP connect() fails to host on multiple ports (8080, 8888)",
+      "note": "ICMP bidirectional OK (rssi -44 dBm, ping 8ms), but TCP SYN fails. Likely router AP isolation, macOS firewall, or ESP32-S3 Wi-Fi STA TCP bug. NOT a firmware bug (lwIP TCP enabled, slots=16, sdkconfig correct)."
+    }
+  },
+  "test03": {
+    "name": "5-minute stability",
+    "result": "PASS",
+    "duration_s": 313.54674768447876,
+    "avg_rate_kbps": 36.09,
+    "rate_stddev_kbps": 8.47,
+    "c5_reboots": 0
+  },
+  "fixes_applied": [
+    {
+      "file": "firmware/src/proto/commands.c",
+      "change": "Added #include \"esp_mac.h\" — esp_read_mac()/ESP_MAC_WIFI_STA needed for RX_WIFI_RELAY branch, was missing only in relay env build",
+      "build_fix": true
+    }
+  ],
+  "samples": [
+    {
+      "elapsed_s": 0,
+      "lost_delta": 25600,
+      "rate_kbps": 1.67,
+      "c5_uptime_ms": 2277754,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -42
+    },
+    {
+      "elapsed_s": 16,
+      "lost_delta": 609280,
+      "rate_kbps": 39.67,
+      "c5_uptime_ms": 2294188,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -42
+    },
+    {
+      "elapsed_s": 32,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2310619,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -42
+    },
+    {
+      "elapsed_s": 49,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2327039,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -43
+    },
+    {
+      "elapsed_s": 65,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2343459,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -43
+    },
+    {
+      "elapsed_s": 82,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2359879,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -43
+    },
+    {
+      "elapsed_s": 98,
+      "lost_delta": 609280,
+      "rate_kbps": 39.67,
+      "c5_uptime_ms": 2376337,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -42
+    },
+    {
+      "elapsed_s": 114,
+      "lost_delta": 609280,
+      "rate_kbps": 39.67,
+      "c5_uptime_ms": 2392769,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -44
+    },
+    {
+      "elapsed_s": 131,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2409198,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -43
+    },
+    {
+      "elapsed_s": 147,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2425623,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -43
+    },
+    {
+      "elapsed_s": 164,
+      "lost_delta": 607232,
+      "rate_kbps": 39.53,
+      "c5_uptime_ms": 2442050,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -42
+    },
+    {
+      "elapsed_s": 180,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2458477,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -43
+    },
+    {
+      "elapsed_s": 197,
+      "lost_delta": 609280,
+      "rate_kbps": 39.67,
+      "c5_uptime_ms": 2474898,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -42
+    },
+    {
+      "elapsed_s": 213,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2491327,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -43
+    },
+    {
+      "elapsed_s": 229,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2507753,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -43
+    },
+    {
+      "elapsed_s": 246,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2524180,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -42
+    },
+    {
+      "elapsed_s": 262,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2540599,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -41
+    },
+    {
+      "elapsed_s": 279,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2557025,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -40
+    },
+    {
+      "elapsed_s": 295,
+      "lost_delta": 608256,
+      "rate_kbps": 39.6,
+      "c5_uptime_ms": 2573458,
+      "c5_ok": true,
+      "head_ready": true,
+      "head_baud": 921600,
+      "ws": false,
+      "sta": true,
+      "rssi": -41
+    }
+  ]
+}
