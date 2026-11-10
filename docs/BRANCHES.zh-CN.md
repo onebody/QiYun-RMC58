@@ -39,7 +39,9 @@
 | ② 源码（main） | `git log`、`git diff` | 只有 relay/dev 及被裁定合入的线会进来；rf-track、第三轨**故意**不在 main |
 | ③ Releases 产物 | `gh release list`，核对 `assets[].digest` | **最容易滞后的一层**：`Web-v0.10` 落后 80 提交 / 261 文件才补发成 `Web-v0.11` |
 
-产物层还有两条硬边界，都不是 bug：
+产物层还有几条硬边界，都不是 bug：
+
+- 线上清单里出现 `Web-v0.11-<n>-g<sha>` **不代表少功能**：那个串是 Pages CI 对 main 当时那一格做 `git describe` 得到的，发布之后 main 每走一格（**连只改文档的提交也算**）它就 +1 并带上 sha，而 `tag Web-v0.11` 钉在发布提交上不动。要让它归零只有一条干净路——发下一版；把 tag 往前挪属于 force push，本项目的发布规则里禁止。
 
 - 网页烧写清单只出 `esp32c5`（`pages.yml` 的 `FW_ENVS: esp32c5`）。`esp32s3-relay`、`esp32c5-head`、`esp32c5-eth` 三张中继/网口镜像页面上刷不到，要本地 `pio run -e …` 或 `./build_release.sh` 一次出五张。
 - `net/` 那五个源文件（`ws_codec` / `ws_link` / `net_prefs` / `relay_pipe` / `softap`）只在带 `WIDSCAN_RELAY` 的构建里编译（`firmware/src/CMakeLists.txt:22`），所以站点刷出来的 C5 镜像**听不懂 `NET` 命令**，即便网页上有配网对话框。
