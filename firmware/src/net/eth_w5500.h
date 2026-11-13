@@ -6,9 +6,14 @@
  *   D8      -> SCLK  (GPIO8)
  *   D9      -> MISO  (GPIO9)
  *   D10     -> MOSI  (GPIO10)
- *   D2      -> CS    (GPIO1)
- *   D6      -> RESET (GPIO12)
+ *   D0      -> CS    (GPIO1)   ← 不是 D2：XIAO C5 的 D2 是 GPIO25
+ *   D7      -> RESET (GPIO12)  ← 不是 D6：XIAO C5 的 D6 是 GPIO11(UART0 TX)
  *   D5      -> INT   (GPIO24, optional — we poll)
+ *
+ * Silkscreen vs GPIO is off-by-label for CS/RST in the XIAO C5 numbering
+ * (D0=GPIO1, D1=GPIO0, D2=GPIO25, D6=GPIO11, D7=GPIO12 per Seeed's pin map),
+ * so wire by the GPIO number. Wiring to the printed D2/D6 leaves CS unasserted
+ * and every SPI read returns 0xff.
  *
  * This driver uses W5500's built-in TCP/IP stack directly (no lwIP, no esp_eth).
  * It brings up a single TCP server on socket 0 that the host connects to.
