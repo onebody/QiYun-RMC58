@@ -243,7 +243,7 @@ static bool send_all(int fd, const uint8_t *buf, size_t n) {
     return true;
 }
 
-static bool dial_and_handshake(const char *host, uint16_t port, const char *path) {
+static bool dial_and_handshake(const char *host, uint16_t port, const char *path, const char *id) {
     char port_text[8];
     snprintf(port_text, sizeof(port_text), "%u", port);
     struct addrinfo hints = {.ai_family = AF_INET, .ai_socktype = SOCK_STREAM}, *ai = NULL;
@@ -267,16 +267,21 @@ static bool dial_and_handshake(const char *host, uint16_t port, const char *path
     }
     freeaddrinfo(ai);
 
-    /* serve.mjs keys the node endpoint on ?id= (web/serve.mjs:471) and the
-     * setup page no longer collects one — the relay names itself after its
-     * MAC, the same suffix the softAP SSID carries. A URL that already has
-     * an id= keeps the operator's choice. */
-    char full_path[160];
+    /* serve.mjs keys the node endpoint on ?id= (web/serve.mjs:471). Order of
+     * precedence: a URL that already carries id= keeps the operator's choice,
+     * then the id saved with NET ID, then the MAC-derived name the softAP SSID
+     * also carries. */
+    char full_path[192];
     if (!strstr(path, "id=")) {
-        uint8_t mac[6];
-        esp_read_mac(mac, ESP_IF_WIFI_STA);
-        snprintf(full_path, sizeof(full_path), "%s%sid=widscan58-%02x%02x%02x",
-                 path, strchr(path, '?') ? "&" : "?", mac[3], mac[4], mac[5]);
+        if (id && id[0]) {
+            snprintf(full_path, sizeof(full_path), "%s%sid=%s",
+                     path, strchr(path, '?') ? "&" : "?", id);
+        } else {
+            uint8_t mac[6];
+            esp_read_mac(mac, ESP_IF_WIFI_STA);
+            snprintf(full_path, sizeof(full_path), "%s%sid=widscan58-%02x%02x%02x",
+                     path, strchr(path, '?') ? "&" : "?", mac[3], mac[4], mac[5]);
+        }
         path = full_path;
     }
 
@@ -578,7 +583,7 @@ static void dial_task_fn(void *arg) {
         printf("[LED] SL_WS_CONNECTING (green fast blink)\n");
         status_led_set_state(SL_WS_CONNECTING);
 #endif
-        if (!dial_and_handshake(host, port, path)) {
+        if (!dial_and_handshake(host, port, path, cfg.id)) {
             set_why("dial");
             if (backoff_ms >= BACKOFF_MAX_MS) {
                 dial_fail_cycles++;

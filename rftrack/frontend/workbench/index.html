@@ -1,20 +1,25 @@
 <!doctype html>
 <!-- RF Track 工作台壳。Vue3 CDN 无构建（用户 2026-10-28 拍板的前端形态）。
 
-   三件事在这张页面里是硬要求，改动前先看清楚再动手：
+   下面几条在这张页面里是硬要求，改动前先看清楚再动手：
    1. **一切本地引用都用相对路径 `./`**。页面可能被挂在任意子路径下（`/workbench/`、
       反代之后的 `/rftrack/workbench/`），写死 `/app.js` 就换一台机器就白屏。
    2. **Vue 有三个来源，最后一个是本仓库里的副本**。局域网部署不许依赖外网：
       CDN 都不通时页面照样得起（`./vendor/`），而 CDN 那两条带 SRI——
       校验和不符的第三方产物不会因为它"能加载"就敢在自己的 origin 上跑。
    3. **未加载成功时必须说清失败在哪一步**，白屏加浏览器控制台不算错误状态。
+   4. **两个工作区入口不在这一页里写死**。它们由 `app.js` 的 `workspaceSwitcher()` 渲染，
+      判据是 `/api/health` 的 `console` 那一节（`workspaces.js`）：控制台那一页是不是由这台
+      实例发出，只有后端答过才算事实。在这张页面里放一条静态 `/app/` 链接，就等于在未挂载
+      的实例上送出一个 404 并且不给理由。
+   5. **改了 styles.css 或 app.js 就连带 bump 下面那两处 `?v=`**，否则部署之后浏览器仍吃旧副本。
 -->
 <html lang="zh" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RF Track 工作台</title>
-<link rel="stylesheet" href="./styles.css?v=20261029">
+<link rel="stylesheet" href="./styles.css?v=20261112">
 </head>
 <body>
 <div id="app">
@@ -43,7 +48,7 @@
   };
 
   function bootModule() {
-    import("./app.js?v=20261029")
+    import("./app.js?v=20261112")
       .then((mod) => mod.mount(document.getElementById("app")))
       .catch((error) => {
         document.documentElement.dataset.bootError = "app";

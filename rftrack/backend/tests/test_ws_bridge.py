@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
-from app.services.ws_bridge import UpstreamClosed
+from app.services.ws_bridge import UpstreamClosed, resolve_link
 
 EP = "serial:/dev/widscan58-1"
 HOME = "192.168.99.11"
@@ -86,6 +86,31 @@ class FakeFactory:
         return next(link for link in self.created if urlsplit(link.url).netloc == f"{host}:8080")
 
 
+class SlowUpstream(FakeUpstream):
+    """`send` 故意慢一拍：两路写有没有交错，只有"上一条还没发完下一条就开始"才看得出来。
+
+    瞬时 send 的假上游无论加不加锁都会给出同一份 `sent`，那种测试对写锁是瞎的。
+    """
+
+    def __init__(self, url: str) -> None:
+        super().__init__(url)
+        self.trace: list[str] = []
+
+    async def send(self, payload: bytes) -> None:
+        self.trace.append(f"enter:{payload!r}")
+        await asyncio.sleep(0.02)
+        self.trace.append(f"exit:{payload!r}")
+        await super().send(payload)
+
+
+class SlowFactory(FakeFactory):
+    async def connect(self, url: str) -> SlowUpstream:
+        link = SlowUpstream(url)
+        link._loop = asyncio.get_running_loop()
+        self.created.append(link)
+        return link
+
+
 @dataclass
 class Rig:
     """一套库、一个 app、若干台已登记的接入机。"""
@@ -113,7 +138,7 @@ class Rig:
         return self.factory.created[count - 1]
 
 
-def make_rig(db_path, *, instance_role: str = "site", hosts=(HOME,)) -> Rig:
+def make_rig(db_path, *, instance_role: str = "site", hosts=(HOME,), factory=None) -> Rig:
     """一套库、一个被测 app、若干台已登记的接入机。
 
     层级由**另一个站点实例**写进库里，再用被测角色的 app 去读：S4 之后汇聚实例对
@@ -131,7 +156,7 @@ def make_rig(db_path, *, instance_role: str = "site", hosts=(HOME,)) -> Rig:
         "/api/relays", json={"site_id": site["site_id"], "name": "起点塔"}
     ).json()
 
-    factory = FakeFactory()
+    factory = factory or FakeFactory()
     app = create_app(
         Settings(db_path=db_path, dialer_enabled=False, instance_role=instance_role),
         upstream_factory=factory,
@@ -537,3 +562,205 @@ def test_health_carries_the_bridge_section(db_path):
     # `observer_failures` 也在这一节里：采集钩子抛过几次、被桥吞了。这一节是 `/ws/bridge`
     # 自己的账，S6 之后它必须同时说清"透传正常但采集没收到"这种只对得上半边的情况。
     assert health["bridge"] == {"sessions": [], "upstreams": 0, "observer_failures": 0}
+
+
+# --- 没有页面的持有者（站点工作台的控制 API）----------------------------------
+#
+# 这一节测的不是透传，是"透传之外还能有第二个使用者"。判据只有一条硬的：
+# **开 USB tty 会复位板子**，所以端点绝不能因为"页面走了"就在 API 还要用它的时候被交还。
+
+
+def api_link(rig, ep: str = EP):
+    return resolve_link(
+        rig.app.state.db, rig.app.state.settings, {"gateway": str(rig.gateway_id)}, ep
+    )
+
+
+def test_an_api_holder_opens_and_releases_the_board_without_any_page(db_path):
+    rig = make_rig(db_path)
+
+    async def scenario():
+        hub = rig.app.state.bridge
+        session = await hub.acquire(api_link(rig))
+        link = await rig.wait_upstreams()
+        assert rig.sessions()[0]["holders"] == 1
+        assert rig.sessions()[0]["subscribers"] == 0
+        await hub.release(session)
+        assert await until(lambda: link.closed is not None)
+        assert link.closed[0] == 1000
+        assert await until(lambda: rig.sessions() == [])
+
+    asyncio.run(scenario())
+
+
+def test_a_page_leaving_does_not_release_a_board_the_api_still_holds(db_path):
+    """这条是整轮控制功能的地基：页面关掉不等于板子可以复位。"""
+    rig = make_rig(db_path)
+
+    async def scenario():
+        hub = rig.app.state.bridge
+        session = await hub.acquire(api_link(rig))
+        link = await rig.wait_upstreams()
+        async with Page(rig.app, url_for(EP, rig.gateway_id)) as page:
+            await page.wait_accepted()
+            assert await until(lambda: rig.sessions()[0]["subscribers"] == 1)
+            link.push(b"\x05")
+            assert await page.receive_bytes() == b"\x05"
+        assert await until(lambda: rig.sessions()[0]["subscribers"] == 0)
+        assert link.closed is None, "API 还握着，上游不许关"
+        assert len(rig.factory.created) == 1
+        await hub.release(session)
+        assert await until(lambda: link.closed is not None)
+
+    asyncio.run(scenario())
+
+
+def test_releasing_the_api_holder_keeps_a_watching_page_connected(db_path):
+    """反方向同一条判据：最后一个使用者走了才交还，谁先走都不算。"""
+    rig = make_rig(db_path)
+
+    async def scenario():
+        hub = rig.app.state.bridge
+        session = await hub.acquire(api_link(rig))
+        async with Page(rig.app, url_for(EP, rig.gateway_id)) as page:
+            await page.wait_accepted()
+            link = await rig.wait_upstreams()
+            # accept 不等于进了读者名单：不等这一条就 release，测到的是"页面还在路上"
+            # 时的收摊，而不是"还有人在看"时的收摊。
+            assert await until(lambda: rig.sessions()[0]["subscribers"] == 1)
+            await hub.release(session)
+            assert await until(lambda: rig.sessions()[0]["holders"] == 0)
+            link.push(b"\x09")
+            assert await page.receive_bytes() == b"\x09"
+            assert link.closed is None
+        assert await until(lambda: link.closed is not None)
+
+    asyncio.run(scenario())
+
+
+def test_a_tap_sees_every_byte_before_the_page_is_fanned_out(db_path):
+    """收答的旁路必须比浏览器早一帧看到字节，否则"命令已回"会晚于页面显示。
+
+    用 `fanned` 在 tap 里的读数来判先后：tap 跑在扇出之前，第一帧时它必须还是 0。
+    """
+    rig = make_rig(db_path)
+
+    async def scenario():
+        hub = rig.app.state.bridge
+        session = await hub.acquire(api_link(rig))
+        link = await rig.wait_upstreams()
+        seen: list[tuple[bytes, int]] = []
+        hub.add_tap(session, lambda payload: seen.append((payload, hub.status()["sessions"][0]["fanned"])))
+        async with Page(rig.app, url_for(EP, rig.gateway_id)) as page:
+            await page.wait_accepted()
+            assert await until(lambda: rig.sessions()[0]["subscribers"] == 1)
+            link.push(b"\x01")
+            assert await page.receive_bytes() == b"\x01"
+            link.push(b"\x02")
+            assert await page.receive_bytes() == b"\x02"
+        assert seen == [(b"\x01", 0), (b"\x02", 1)]
+
+    asyncio.run(scenario())
+
+
+def test_a_throwing_tap_never_stops_the_bytes_reaching_the_page(db_path):
+    """旁路坏了不许带走透传——与 observer 同一条纪律，而且要有账可查。"""
+    rig = make_rig(db_path)
+
+    async def scenario():
+        hub = rig.app.state.bridge
+        session = await hub.acquire(api_link(rig))
+        link = await rig.wait_upstreams()
+        good: list[bytes] = []
+
+        def bad(payload: bytes) -> None:
+            raise RuntimeError("boom")
+
+        hub.add_tap(session, bad)
+        hub.add_tap(session, good.append)
+        async with Page(rig.app, url_for(EP, rig.gateway_id)) as page:
+            await page.wait_accepted()
+            assert await until(lambda: rig.sessions()[0]["subscribers"] == 1)
+            link.push(b"\x01")
+            assert await page.receive_bytes() == b"\x01"
+        assert good == [b"\x01"]
+        assert rig.sessions()[0]["tap_failures"] == 1
+
+    asyncio.run(scenario())
+
+
+def test_removing_a_tap_stops_delivery_and_teardown_clears_the_rest(db_path):
+    rig = make_rig(db_path)
+
+    async def scenario():
+        hub = rig.app.state.bridge
+        session = await hub.acquire(api_link(rig))
+        link = await rig.wait_upstreams()
+        seen: list[bytes] = []
+        tap = hub.add_tap(session, seen.append)
+        link.push(b"\x01")
+        assert await until(lambda: seen == [b"\x01"])
+        hub.remove_tap(session, tap)
+        link.push(b"\x02")
+        assert await until(lambda: rig.sessions()[0]["fanned"] == 2)
+        assert seen == [b"\x01"], "摘掉的旁路不许再收到字节"
+        assert rig.sessions()[0]["taps"] == 0
+        await hub.release(session)
+        assert await until(lambda: rig.sessions() == [])
+
+    asyncio.run(scenario())
+
+
+def test_page_writes_and_api_writes_never_interleave_on_one_upstream(db_path):
+    """桥那边只有一条字节流：两路交错写就是把两条命令撕成一条。
+
+    页面之间的 `busy` 仲裁是另一回事，这里只管"一次 send 完整发完再发下一次"。
+    """
+    rig = make_rig(db_path, factory=SlowFactory())
+
+    async def scenario():
+        hub = rig.app.state.bridge
+        session = await hub.acquire(api_link(rig))
+        link = await rig.wait_upstreams()
+        async with Page(rig.app, url_for(EP, rig.gateway_id)) as page:
+            await page.wait_accepted()
+            assert await until(lambda: rig.sessions()[0]["subscribers"] == 1)
+
+            async def api_write():
+                async with session.write_lock:
+                    await session.upstream.send(b"API")
+
+            await asyncio.gather(page.send_bytes(b"PAGE"), api_write())
+            assert await until(lambda: len(link.trace) == 4)
+        for enter, exit_ in ((link.trace[0], link.trace[1]), (link.trace[2], link.trace[3])):
+            assert enter.startswith("enter:"), link.trace
+            assert exit_ == enter.replace("enter:", "exit:", 1), link.trace
+        assert sorted(link.sent) == [b"API", b"PAGE"]
+
+    asyncio.run(scenario())
+
+
+def test_an_upstream_that_dies_hands_back_a_clean_slot(db_path):
+    """上游自己没了：持有者与旁路都要清干净，下一次 acquire 必须真的重开一把钥匙。"""
+    rig = make_rig(db_path)
+
+    async def scenario():
+        hub = rig.app.state.bridge
+        session = await hub.acquire(api_link(rig))
+        link = await rig.wait_upstreams()
+        seen: list[bytes] = []
+        hub.add_tap(session, seen.append)
+        link.drop(1011, "serial gone")
+        assert await until(lambda: rig.sessions() == [])
+        # 收摊之后再 release 不许抛，也不许把新会话误关掉。
+        await hub.release(session)
+        again = await hub.acquire(api_link(rig))
+        fresh = await rig.wait_upstreams(2)
+        assert fresh is not link
+        assert again is not session
+        fresh.push(b"\x03")
+        assert await until(lambda: rig.sessions()[0]["fanned"] == 1)
+        await hub.release(again)
+        assert await until(lambda: fresh.closed is not None)
+
+    asyncio.run(scenario())

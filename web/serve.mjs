@@ -197,12 +197,80 @@ function expireDiscovered(maxAgeMs = 30_000) {
   for (const [k, info] of discoveredServers) if (info.lastSeen < cut) discoveredServers.delete(k);
 }
 
+/* ---------- LAN host selection for /api/nodes bridge URLs.
+ *
+ * macOS/Linux 多网卡机器上，networkInterfaces() 返回顺序不稳定：可能先到
+ * utun/VPN/tunnel 的 IP（对 relay 不可达），再到真实局域网 IP（relay 实际
+ * 拨进来的那个）。我们要告诉面板「relay 是从哪块网卡进来的」，不是让 JS
+ * 猜哪张网卡。所以：
+ *   1. attachNode 把 relay 的 socket.remoteAddress 记下来；
+ *   2. pickLanHost() 里用 relay 的来源 IP 反查本机哪块网卡在同一网段
+ *      （/16 近似：前两段相等，够 LAN 多网段常见场景）；
+ *   3. 没 relay 在线时才回落到枚举非 internal 网卡里最像样的一张。
+ * 这比 255.255.255.255 UDP 广播的 beacon 还要准——beacon 每 5 s 才发一次，
+ * relay 刚连上还没发过 beacon，但 socket.remoteAddress 当场就有。
+ */
+function pickLanHost(relayPeers, discoveredNodesExtraHosts = []) {
+  // relay 正在连的网段优先级最高（最准的实时信号）
+  const localIfs = [];
+  for (const addrs of Object.values(networkInterfaces()) ?? []) {
+    for (const a of addrs ?? []) {
+      if (a.family === "IPv4" && !a.internal && a.address !== "127.0.0.1")
+        localIfs.push(a.address);
+    }
+  }
+  for (const peer of relayPeers) {
+    for (const local of localIfs) {
+      if (sameLan(local, peer)) return local;
+    }
+  }
+  // relay 离线时，参考 beacon 发现的节点所在网段（discoveredNodes 里每个 entry 有 host）
+  for (const peer of discoveredNodesExtraHosts) {
+    for (const local of localIfs) {
+      if (sameLan(local, peer)) return local;
+    }
+  }
+  // 回落：排除隧道/虚拟网卡网段，优先典型家庭/办公网段。
+  // 100.64.0.0/10 = Tailscale/CGNAT，172.15-31.0.0/16 部分是隧道，utun5 常 192.168.0.100 这种。
+  // 关键启发式：一台机器同时有 192.168.0.x 和 100.*（Tailscale）时，192.168.0.x 大概率
+  // 也是隧道 WireGuard（utun5），而 Wi-Fi 通常占 192.168.31.x 这类不相邻的段；
+  // 两个 192.168.x 同时存在时，挑网段号较大的那个（更像真实 LAN）。
+  const remaining = localIfs.filter(a => !a.startsWith("100."));
+  const hasVpn = localIfs.some(a => a.startsWith("100.") || a.startsWith("10."));
+  const scored = remaining.map(a => ({ a, score: lanScore(a) }));
+  if (hasVpn) {
+    // 把 utun 风格的 192.168.0.x 再降一档
+    for (const item of scored)
+      if (item.a.split(".")[1] === "168" && item.a.split(".")[2] === "0") item.score -= 40;
+  }
+  scored.sort((x, y) => y.score - x.score);
+  return scored[0]?.a ?? localIfs[0] ?? "localhost";
+}
+function lanScore(ip) {
+  const parts = ip.split(".").map(Number);
+  if (parts[0] === 192 && parts[1] === 168 && parts[2] === 1) return 100;      // 192.168.1.x
+  if (parts[0] === 192 && parts[1] === 168) return 80;                        // 192.168.0/31.x
+  if (parts[0] === 10) return 60;                                             // 10.x.x.x
+  if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return 20;       // 172.16-31.x.x
+  return 10;
+}
+function sameLan(a, b) {
+  const ia = a.split("."); const ib = b.split(".");
+  // /24 掩码：前三段必须完全相等，才能确保 relay 所在网段与 host 网段一致。
+  // 之前比 /16 会把 192.168.0.x（WireGuard utun5）和 192.168.31.x（真实 Wi-Fi）
+  // 当成同网段，选错 bridge host 导致 relay 连不上。
+  return ia.length === 4 && ib.length === 4 && ia[0] === ib[0] && ia[1] === ib[1] && ia[2] === ib[2];
+}
+
 function listNodes() {
   expireDiscovered();
+  const relayPeers = [...nodes.values()].map(n => n.peer).filter(Boolean);
+  const discoveredHosts = [...discoveredNodes.values()]
+    .map(e => e.host).filter(Boolean);
+  const hostPart = pickLanHost(relayPeers, discoveredHosts);
+  console.log(`[listNodes] relayPeers=${relayPeers.join(",") || "-"} picked hostPart=${hostPart}`);
   const nodeList = [];
   for (const [id, info] of nodes) {
-    // Bridge to THIS server
-    const hostPart = Object.values(networkInterfaces()).flat().find(a => a?.family === "IPv4" && !a.internal)?.address ?? "localhost";
     nodeList.push({
       id,
       kind: "relay",
@@ -575,7 +643,13 @@ function attachNode(socket, head, rawId) {
       old.page = null;
     }
   }
-  const node = { id, socket, page: null };
+  // peer 是 relay 从哪块网卡进来的 remoteAddress，用它挑 bridge URL 的 host。
+  // socket.remoteAddress 在 upgrade 路径下通常是 IPv4 "192.168.x.x"；
+  // 偶尔是 IPv6 映射（"::ffff:192.168.x.x"），剥掉前缀以免比较出偏差。
+  let peer = socket.remoteAddress ?? "";
+  if (peer.startsWith("::ffff:")) peer = peer.slice(7);
+  console.log(`node: ${id} peer=${peer} local=${socket.localAddress}:${socket.localPort}`);
+  const node = { id, socket, peer, page: null };
   nodes.set(id, node);
   console.log(`node: ${id} connected`);
   readFrames(

@@ -167,6 +167,10 @@ def health(request: Request, session: Session = Depends(get_session)) -> dict:
         # `/ws/bridge` 的实时占用：谁在看哪块板、写权在谁手上。没人在连也要说得出口
         # （`sessions: []`）——"这张表还没做"和"现在确实没页在连"是两个不同的结论。
         "bridge": request.app.state.bridge.status(),
+        # 命令通路这一节回答"点了按钮为什么板子没动"：开关开没开、现在替几块板握着端点、
+        # 发过几条、超时几条、上一条错是什么。`bridge` 说的是"谁在看哪块板"，这一节说的是
+        # "有没有一只不发命令也占着串口的手"——`holders` 迟迟不归零就是 RotorHazard 起不来的原因。
+        "control": request.app.state.control.status(),
         # 页面挂没挂。工作台是可选件，所以这一节只呈现事实、不参与 `status` 判定：
         # 把"这台只提供 API"报成 degraded，运营者就会开始忽略 degraded。
         "workbench": request.app.state.workbench,

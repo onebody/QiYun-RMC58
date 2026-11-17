@@ -191,10 +191,19 @@ export interface DeviceStats {
 
 // Which reply ends a command. Most commands answer OK/ERR; queries answer with
 // their own keyword; RAWIQ answers with frames, done at the last chunk.
-function replyMatcher(cmd: string): (item: StreamItem) => boolean {
+export function replyMatcher(cmd: string): (item: StreamItem) => boolean {
   const word = cmd.split(" ")[0];
   const isErr = (i: StreamItem) => i.kind === "text" && i.line.startsWith("ERR");
   if (word === "RAWIQ") return (i) => (i.kind === "frame" && i.type === FRAME_RAWIQ && rawIqChunkIsLast(i.payload)) || isErr(i);
+  // NET is one family with two reply shapes: the queries (NET STATUS, NET SCAN)
+  // answer with a "NET " payload, every setter answers plain OK/ERR. Waiting for
+  // "NET " on a setter timed out for 3 s per line and made Save look dead.
+  if (word === "NET") {
+    const query = cmd === "NET STATUS" || cmd === "NET SCAN";
+    return (i) => i.kind === "text" && (query
+      ? i.line.startsWith("NET ") || isErr(i)
+      : i.line === "OK" || i.line.startsWith("OK ") || isErr(i));
+  }
   const query: Record<string, string> = {
     INFO: "INFO ",
     "PROFILE?": "PROFILE ",
@@ -208,8 +217,6 @@ function replyMatcher(cmd: string): (item: StreamItem) => boolean {
     "METRICS?": "METRICS ",
     "GPIO?": "GPIO ",
     SYNC: "SYNC ",
-    // NET commands: reply always starts with "NET " (JSON or array or plain)
-    "NET": "NET ",
   };
   const prefix = query[word];
   if (prefix) return (i) => (i.kind === "text" && i.line.startsWith(prefix)) || isErr(i);

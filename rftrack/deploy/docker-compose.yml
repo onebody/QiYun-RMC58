@@ -20,6 +20,15 @@ services:
       # RFTRACK_INSTANCE_ROLE: site
     volumes:
       - rftrack-data:/data
+      # 控制台（`/app/`）发的是 `web/dist/`：那是 node 构建产物，既不在 git 里，也不该为了它
+      # 在镜像里装一套 node 工具链（主形态的 Pi 更跑不动）。所以它跟现场配置一样从外面进来。
+      # 挂点就是后端默认值在容器里的位置（`app/config.py` 的 `DEFAULT_CONSOLE_DIR` = 仓库根下
+      # `web/dist`，容器里是 `/app/web/dist`），不需要另设 `RFTRACK_WEB_DIR`。
+      # 没构建也能起：挂载只会得到一个空目录，`/api/health` 的 `console` 与根上那页入口都如实
+      # 说"配了目录但里面没有 index.html"，不谎报也不 404（`mount_console` 那条判据）。
+      # 更新流程 = `cd web && npm run build` 之后 `docker compose restart`——挂没挂是启动那一刻
+      # 看的，运行中往目录里补文件不会让 `/app` 这一节自己活过来。
+      - ../../web/dist:/app/web/dist:ro
     restart: unless-stopped
 
 volumes:

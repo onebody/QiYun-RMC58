@@ -39,6 +39,13 @@ export function createStore({ api, context, registry, timers = globalThis, colum
     removed: new Map(),
     errors: [],
     savedAt: null,
+    /**
+     * 租约换代计数：`releaseAll()` 每收一次摊就 +1，页面拿它当组件 `key` 的一半。
+     * 少了它，重开同一份布局时 `instance_id` 没变、组件类型没变，Vue 会**复用旧实例**：
+     * 组件在 `setup` 里捕获的那份 lease 已经被 release 掉（定时器清了、onRelease 钩子跑了），
+     * 于是格子看着还在、其实再也不动，而它新登记的定时器又落进一个已删除的账本里没人回收。
+     */
+    generation: 0,
   };
 
   const leases = new Map();
@@ -196,6 +203,7 @@ export function createStore({ api, context, registry, timers = globalThis, colum
   function releaseAll() {
     state.widgets.forEach((widget) => release(widget.instance_id));
     leases.clear();
+    state.generation += 1;
   }
 
   // --- 只读闸门 ---------------------------------------------------------------

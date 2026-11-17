@@ -13,6 +13,7 @@
 
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_system.h"
 #include "esp_wifi.h"
@@ -259,7 +260,16 @@ bool softap_running(void) { return ap_running(); }
 bool softap_start(const char *ssid_suffix) {
     ap_lock();
     if (ap_up) { ap_unlock(); return true; }
-    printf("SOFTAP: start (ssid_suffix=%s)\n", ssid_suffix ? ssid_suffix : "relay");
+    /* Without an explicit suffix keep the MAC-derived name the automatic path
+     * uses, so "Widscan58-<chip>" means the same board however it came up. */
+    char chip[12];
+    if (!ssid_suffix) {
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_IF_WIFI_STA);
+        snprintf(chip, sizeof(chip), "%02x%02x%02x", mac[3], mac[4], mac[5]);
+        ssid_suffix = chip;
+    }
+    printf("SOFTAP: start (ssid_suffix=%s)\n", ssid_suffix);
 
     /* Register WiFi event handler (once). */
     static bool evt_registered = false;
@@ -312,7 +322,7 @@ bool softap_start(const char *ssid_suffix) {
 
     /* ---- Configure + start the AP (driver is stopped in both paths) ---- */
     wifi_config_t wc = {0};
-    snprintf((char *)wc.ap.ssid, sizeof(wc.ap.ssid), "Widscan58-%s", ssid_suffix ? ssid_suffix : "relay");
+    snprintf((char *)wc.ap.ssid, sizeof(wc.ap.ssid), "Widscan58-%s", ssid_suffix);
     wc.ap.ssid_len = strlen((char *)wc.ap.ssid);
     wc.ap.channel = 6;
     wc.ap.authmode = WIFI_AUTH_OPEN;
@@ -696,7 +706,12 @@ bool softap_start_task(const char *ssid_suffix) {
 
 /* ---- USB command handlers: NET SCAN, NET AP on/off ---- */
 bool softap_cmd_scan(char *out, size_t cap) {
-    if (!ap_up && !softap_start_task(NULL)) return false;
+    /* The radio can scan while it is a plain STA. Only a driver that never
+     * started (booted with no saved credentials, so nothing dials) needs the
+     * softAP bring-up - and that bring-up tears the Wi-Fi link down and up, so
+     * doing it on a configured relay would drop the operator's own page. */
+    extern bool driver_up;  /* ws_link.c */
+    if (!driver_up && !softap_start_task(NULL)) return false;
     return do_scan(out, cap) == 0;
 }
 

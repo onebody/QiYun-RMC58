@@ -1019,6 +1019,72 @@ async function run() {
     return `${demo} 枚 DEMO 角标；通路角标 ${[...new Set(registered.map((row) => row.badge))].join("/")}；库里第一条灰项：${planned.name}｜${planned.reason}`;
   });
 
+  // 双工作区（P0 阶段 3.2）：这一页与控制台是两套产物，入口与"现在在哪一边"都必须由页面自己说。
+  // 这两条判据要的是**形态**而不是样式：两条入口都在、当前那条点了不会原地刷新、控制台那边要么能跳
+  // 要么把健康检查给的理由原样摆出来——把"没挂"写成一条 404 链接是这个阶段专门登记过的错法。
+  await check("顶栏两条工作区入口都在：当前这条不给链接，控制台那条按健康的答复给链接或给理由", async () => {
+    const rows = await waitFor("两条工作区入口都渲染出来", async () => {
+      const found = await inPage(() => [...document.querySelectorAll(".ws-entry")].map((el) => ({
+        id: el.dataset.workspaceId,
+        state: el.dataset.workspaceState,
+        tag: el.tagName.toLowerCase(),
+        href: el.getAttribute("href") || "",
+        name: (el.querySelector(".ws-name") || {}).textContent?.trim() || "",
+        note: (el.querySelector(".ws-note") || {}).textContent?.trim() || "",
+      })));
+      return found.length === 2 ? found : null;
+    });
+    const byId = Object.fromEntries(rows.map((row) => [row.id, row]));
+    expect(byId.site && byId["single-node"], `入口清单少了人：${rows.map((row) => row.id).join(",")}`);
+    expect(byId.site.state === "current", `这一页是站点侧，当前条却标成 ${byId.site.state}`);
+    expect(byId.site.tag === "span" && !byId.site.href,
+      `当前那条给了链接（${byId.site.href}）：点了只会原地刷新，长得却能像切走`);
+    const console1 = byId["single-node"];
+    if (console1.state === "ready") {
+      expect(console1.tag === "a" && console1.href === "/app/", `说挂上了却没给可跳的 /app/：${JSON.stringify(console1)}`);
+    } else {
+      expect(!console1.href && console1.note,
+        `state=${console1.state} 却没把理由摆出来（href=${console1.href || "无"}｜note=${console1.note || "无"}）：灰按钮让人猜是登记过的错法`);
+    }
+    return `当前=${byId.site.name}；控制台=${console1.state}｜${console1.href || console1.note}`;
+  });
+
+  await check("状态栏第一段就说清这是哪一边：名字在 DOM 上，不是只藏在 URL 里", async () => {
+    const part = await inPage(() => {
+      const el = document.querySelector('footer.status [data-workspace="1"]');
+      if (!el) return null;
+      return {
+        label: (el.querySelector(".status-label") || {}).textContent?.trim() || "",
+        value: (el.querySelector(".status-value") || {}).textContent?.trim() || "",
+        first: el.parentElement.firstElementChild === el,
+        visible: el.offsetWidth > 0 && el.offsetHeight > 0,
+      };
+    });
+    expect(part, "状态栏没有 data-workspace 那一段：这一页不说明自己是哪一边");
+    expect(part.first, "工作区那段没排在最前：两个页签并排时先要看的必须是这个");
+    expect(part.label === "工作区" && /Site Monitoring/.test(part.value), `那一段是「${part.label}=${part.value}」`);
+    expect(part.visible, `${part.value} 被压成 0 尺寸，等于没写`);
+    return part.value;
+  });
+
+  // 这一条是这一轮顺手抓到的一处排版事故：未上线那一条把 `reason` 在摘要行与"不上线的原因："
+  // 行各铺一遍。它不影响功能，但组件库那一列的高度决定整页的高度——同一段话说两遍，
+  // 画布盒子就被拉到窗口外面，"拖出画布盒子"那一档判据连落点都摆不出来。
+  await check("组件库那条灰项不把同一段话说两遍：摘要行讲是什么，原因行讲为什么", async () => {
+    const rows = await inPage(() => [...document.querySelectorAll(".lib-item--off")].map((li) => ({
+      name: (li.querySelector(".lib-planned strong") || {}).textContent?.trim() || "",
+      summary: (li.querySelector(".lib-summary") || {}).textContent?.trim() || "",
+      reason: (li.querySelector(".lib-reason") || {}).textContent?.trim() || "",
+    })));
+    expect(rows.length >= 3, `灰掉的条目只有 ${rows.length} 条，这一判据没东西可查`);
+    for (const row of rows) {
+      expect(!/^不上线的原因：/.test(row.summary), `${row.name} 的摘要行把原因原样复读了一遍：${row.summary.slice(0, 40)}…`);
+      expect(row.summary !== row.reason.replace(/^不上线的原因：/, ""), `${row.name} 两行是同一句话`);
+      expect(row.reason.length > 0 && row.summary.length > 0, `${row.name} 缺摘要或缺原因`);
+    }
+    return `${rows.length} 条灰项，摘要/原因两行各自成话：${rows.map((r) => r.name).join("、")}`;
+  });
+
   await check("状态栏把当前场地/位置/接入机/板逐个写出来（不是只藏在下拉里）", async () => {
     const parts = await statusFromDom();
     const want = ["场地", "位置", "接入机", "板", "布局", "改动", "实例"];
@@ -1599,6 +1665,36 @@ async function run() {
     expect(!/DEMO/.test(body), `node-status 里出现了 DEMO 角标：${body.slice(0, 80)}`);
     const status = await statusFromDom();
     return `状态栏板=${statusValue(status, "板")}；${body.slice(0, 96)}…`;
+  });
+
+  await check("「最近」那一格印的是后端那个时刻的 UTC 秒位，不是被浏览器换算过的一次", async () => {
+    // 期望值**不**由 `Date.parse` 反推：那样页面与判据会一起错。这里把 ISO 串里的
+    // `T` 之后六个数字当锚——它只在串自带偏移时才等于那一刻的 UTC 墙上时间。
+    const inScope = await inPage(() => window.rftrackWorkbench.context.state.scopeNodes.map((row) => row.node_id));
+    const rows = (await (await fetch(`${server.origin}/api/nodes`)).json()).filter((row) => inScope.includes(row.node_id));
+    const timed = rows.filter((row) => row.last_seen);
+    expect(timed.length > 0, `范围内没有一行带 last_seen：夹具的 ingest 没跑？${rows.length} 行`);
+    const lines = await inPage(() =>
+      [...document.querySelectorAll('.widget[data-plugin="node-status"] .node-line')].map((el) => ({
+        name: el.previousElementSibling?.querySelector("strong")?.textContent?.trim() || "",
+        text: el.textContent.replace(/\s+/g, " ").trim(),
+      }))
+    );
+    for (const row of timed) {
+      expect(
+        /([+-]\d{2}:\d{2}|Z)$/.test(row.last_seen),
+        `后端给的 last_seen 没有偏移，浏览器会按本地时区解释它：${JSON.stringify(row.last_seen)}`
+      );
+      const line = lines.find((one) => one.name === row.display_name);
+      expect(line, `node-status 里没有「${row.display_name}」这一行：${lines.map((one) => one.name).join(",")}`);
+      const shown = line.text.match(/最近 (\d{2}:\d{2}:\d{2})/);
+      expect(shown, `那一行没有"最近 时:分:秒"：${line.text}`);
+      expect(
+        shown[1] === row.last_seen.slice(11, 19),
+        `页面上是 ${shown[1]}，而 ${row.last_seen} 的 UTC 秒位是 ${row.last_seen.slice(11, 19)}`
+      );
+    }
+    return `${timed.map((row) => `${row.display_name}=${row.last_seen.slice(11, 19)}`).join(" ")}`;
   });
 
   await check("切回那份降级的被服务端拒：页面给的是人话，且当前布局不许换", async () => {

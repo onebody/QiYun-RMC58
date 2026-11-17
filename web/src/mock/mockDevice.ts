@@ -149,6 +149,7 @@ export class MockTransport implements Transport {
   private rhCur = 0;
   private rhWrite: { cmd: number; need: number; got: number[] } | null = null;
   private rhText: string | null = null;
+  private lastRhReadMs = -1e9;
   private rhMetric: "RSSI" | "SNR" = "RSSI";
   private rhNfft = 64; // the capture is 4 × this in RotorHazard mode
   private rhFilter: LapFilter = "MEDIAN";
@@ -460,6 +461,10 @@ export class MockTransport implements Transport {
       if (b === 10) {
         const line = this.rhText.trim();
         this.rhText = null;
+        // While the RH link is being polled the command task has no idle slot
+        // for text (commands.c rh_idle gate): PROTOCOL? goes unanswered, as on
+        // the relay chain. An idle link (e.g. after REBOOT) still answers it.
+        if (line === "PROTOCOL?" && performance.now() - this.lastRhReadMs < 1200) return;
         if (line === "METRICS?") this.text(`METRICS ${this.rhMetric}\n`);
         else if (this.rhAllowed(line)) setTimeout(() => this.command(line), 2);
         else this.text("ERR rh_mode\n");
@@ -488,6 +493,7 @@ export class MockTransport implements Transport {
   }
 
   private rhRead(cmd: number) {
+    this.lastRhReadMs = performance.now();
     const s = this.rhSeats[this.rhCur];
     const l = s.lap;
     const now = this.rhNow();

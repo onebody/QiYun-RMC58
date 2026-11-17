@@ -83,6 +83,12 @@ ul { list-style: none; padding: 0; }
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-height: 100vh;
+  /* 只有 min-height 的话，`minmax(0,1fr)` 那一行会被**内容**顶开：组件库列出十几条声明，
+   * 整页就跟着变两三层高，画布盒子被一起拉长到看不见的地方——画布里的格子要用"拖出画布盒子"
+   * 来验证尺寸跟着走，盒子比窗口还高时那一档根本摆不出来。`.panel` 与 `.workspace` 本来就写了
+   * `overflow:auto; min-height:0`，它们等的是这个上界：三列各自滚，页脚始终在窗口里。 */
+  height: 100vh;
+  height: 100dvh;
 }
 .masthead {
   display: flex;
@@ -94,6 +100,30 @@ ul { list-style: none; padding: 0; }
   background: var(--surface);
 }
 .masthead h1 { font-size: 14px; font-weight: 600; }
+
+/* --- 双工作区入口（P0 阶段 3）---------------------------------------------------
+ * 当前那一边必须是"看着就不是链接"的样子：它没有 href，点了不跳，但形状要仍读得出它是
+ * 这一页的名字。不可跳转的那一边把理由写在同一行里——只灰掉一个按钮，运营者只能靠猜。 */
+.workspaces { display: flex; align-items: baseline; gap: 6px; }
+.ws-entry {
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.6;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  color: var(--ink-2);
+  text-decoration: none;
+}
+.ws-entry--link { color: var(--s1); border-color: var(--s1); }
+.ws-entry--link:hover { text-decoration: underline; }
+.ws-entry--current { color: var(--ink); border-color: var(--ink-2); background: var(--surface-2); font-weight: 600; }
+/* 未挂载与没答复分两色：前者是问到了并且答案是"没挂"，后者是还没问到，语气不一样。 */
+.ws-entry--off { color: var(--muted); border-style: dashed; }
+.ws-note { font-size: 9px; font-weight: normal; color: var(--muted); max-width: 260px; }
 
 .toolbar {
   display: flex;
@@ -174,7 +204,9 @@ select, input[type="text"], input[type="number"] {
 .lib-add { display: flex; align-items: baseline; gap: 6px; background: none; border: 0; padding: 0; cursor: pointer; color: var(--ink); }
 .lib-add:disabled { color: var(--muted); cursor: default; }
 .lib-add strong { font-weight: 600; }
-.lib-src, .lib-size { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.lib-src, .lib-size, .lib-workspace { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+/* 归另一边的条目：措辞要一眼和"排期没到"分开，所以换色而不是加字。 */
+.lib-workspace--other { color: var(--accent); }
 .lib-planned { display: flex; gap: 6px; align-items: baseline; color: var(--muted); }
 .lib-summary { font-size: 11px; color: var(--ink-2); }
 .lib-reason { font-size: 11px; color: var(--warning); }
@@ -521,3 +553,97 @@ th { color: var(--muted); font-weight: 500; font-size: 10px; text-transform: upp
 .chip--resolved { color: var(--good); border-color: var(--good); }
 .alert-detail { border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 6px; }
 .alert-panel { display: flex; flex-direction: column; gap: 4px; }
+
+/* --- 节点控制三格（写侧：扫描控制 / 协议控制台 / 原始 I/Q）----------------------
+ * 三条纪律：
+ * 1. **对象行永远在最上面**（`.ctl-head`），窄屏靠换行而不是省略号——"我在写哪块板"
+ *    是这三格唯一的区分位，挤掉它就等于让人盲写。
+ * 2. 控件行一律换行，不横滚：栅格里最窄的一格只有 4 列。唯一的例外是频道计划表
+ *    （六段 × 八档本来就比格子宽），它的横滚关在 `.plan-scroll` 里。
+ * 3. 颜色只用既有变量：选中态 = `--accent`，危险操作 = `--critical`，旧读数 = `--warning`。
+ *    不另造一套红，否则"危险"在两套页面上会是两个颜色。
+ */
+.node-control { display: flex; flex-direction: column; gap: 6px; }
+.ctl-head { display: flex; flex-direction: column; gap: 3px; padding-bottom: 5px; border-bottom: 1px solid var(--border); }
+.ctl-head .meta { margin-top: 0; }
+.ctl-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.ctl-picker { max-width: 230px; }
+.ctl-group { display: flex; flex-direction: column; gap: 4px; padding-top: 5px; border-top: 1px dashed var(--border); }
+.ctl-group-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.ctl { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.ctl-label { color: var(--ink-2); font-size: 11px; flex: 0 1 160px; min-width: 120px; }
+.ctl-row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; flex: 1 1 200px; min-width: 0; }
+.ctl-num { width: 72px; }
+.ctl-num--wide { width: 110px; }
+.ctl-select { max-width: 200px; }
+.ctl-range { flex: 1 1 120px; min-width: 90px; accent-color: var(--accent); }
+.seg { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+/* 选中态除了颜色还加粗：浅主题与色盲下"哪个亮着"不能只靠色相。 */
+.seg .btn.on { border-color: var(--accent); color: var(--accent); background: var(--surface-2); font-weight: 600; }
+.btn--danger { color: var(--critical); border-color: var(--critical); }
+.btn--danger:hover:not(:disabled) { background: color-mix(in srgb, var(--critical) 18%, transparent); }
+.btn--quick { font-family: var(--mono); font-size: 10px; padding: 1px 5px; }
+.ctl-quick { display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* 频道计划表：格子本身是按钮，选中态用边框 + 底色两重记号。 */
+.plan-scroll { overflow-x: auto; scrollbar-width: thin; scrollbar-color: var(--axis) var(--surface); }
+.plan-chart { border-collapse: collapse; font-size: 10px; }
+.plan-chart th { color: var(--muted); font-weight: normal; padding: 1px 3px; text-align: center; }
+.plan-chart td { padding: 1px; }
+.plan-band { font-size: 10px; padding: 1px 5px; white-space: nowrap; }
+.plan-chan { display: flex; flex-direction: column; align-items: center; padding: 1px 4px; min-width: 44px; font-size: 10px; }
+.plan-chan.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.plan-chan.on b { color: var(--ink); }
+.plan-mhz { font-family: var(--mono); font-size: 9px; color: var(--muted); }
+.plan-enable { gap: 8px; }
+.plan-check { display: inline-flex; gap: 3px; align-items: center; font-size: 11px; }
+
+/* 协议控制台：日志有界高度 + 自己的滚动条。浏览器默认那条亮灰在深色页面上像一道疤，
+ * 所以这里按页面的调色板画（`--axis` 滑块 / `--surface` 轨道），浅主题自动跟着变量走。 */
+.console-row { display: flex; gap: 6px; align-items: center; }
+.console-input { flex: 1 1 160px; min-width: 0; font-family: var(--mono); }
+.console-log {
+  list-style: none; margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 3px;
+  max-height: 260px; overflow: auto;
+  scrollbar-width: thin; scrollbar-color: var(--axis) var(--surface);
+}
+.console-log::-webkit-scrollbar { width: 8px; }
+.console-log::-webkit-scrollbar-track { background: var(--surface); }
+.console-log::-webkit-scrollbar-thumb { background: var(--axis); border-radius: 4px; }
+.console-log::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+.plan-scroll::-webkit-scrollbar { height: 8px; }
+.plan-scroll::-webkit-scrollbar-track { background: var(--surface); }
+.plan-scroll::-webkit-scrollbar-thumb { background: var(--axis); border-radius: 4px; }
+.console-line {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 3px 6px; border: 1px solid var(--grid); border-radius: 4px;
+  font-family: var(--mono); font-size: 11px;
+}
+.console-line.is-bad { border-left: 3px solid var(--warning); }
+.console-at { color: var(--muted); font-size: 10px; }
+.console-tx { color: var(--accent); word-break: break-all; }
+.console-rx { color: var(--ink); white-space: pre-wrap; word-break: break-all; }
+.console-json summary { cursor: pointer; color: var(--muted); font-size: 10px; }
+.console-json pre {
+  margin: 2px 0 0; padding: 4px 6px;
+  background: var(--page); border: 1px solid var(--grid); border-radius: 4px;
+  color: var(--ink-2); font-size: 10px; white-space: pre-wrap; word-break: break-all;
+  max-height: 180px; overflow: auto;
+}
+
+/* 原始 I/Q：星座与波形并排，谱独占一行。**高度写死**而不是按格子比例——格子被拖扁时
+ * canvas 的 clientHeight 会跟着塌成 0，图就成了一条线，而 `resizeCanvas` 只会照实画。 */
+.iq-info { font-family: var(--mono); font-size: 10px; color: var(--ink-2); }
+.iq-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.iq-chart { height: 150px; }
+.iq-chart--wide { height: 170px; margin-top: 6px; }
+/* 这三格的内容比格子高时，滚动条也按同一套调色板画（只影响装着控制格的那些格子）。 */
+.widget-body:has(.node-control) { scrollbar-width: thin; scrollbar-color: var(--axis) var(--surface); }
+.widget-body:has(.node-control)::-webkit-scrollbar { width: 8px; }
+.widget-body:has(.node-control)::-webkit-scrollbar-track { background: var(--surface); }
+.widget-body:has(.node-control)::-webkit-scrollbar-thumb { background: var(--axis); border-radius: 4px; }
+@media (max-width: 640px) {
+  .iq-grid { grid-template-columns: 1fr; }
+  .ctl-label { flex: 1 1 100%; min-width: 0; }
+}

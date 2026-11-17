@@ -18,6 +18,7 @@
 
 import asyncio
 import json
+import sqlite3
 import zlib
 from contextlib import contextmanager
 from datetime import timedelta
@@ -30,6 +31,7 @@ from app.config import Settings
 from app.models import Gateway, SampleSummary, SignalEvent
 from app.services import capture as capture_module
 from app.services.capture import CapturePipeline
+from app.services.dialer import FetchResult
 from app.services.frame_parser import (
     CHANNEL,
     FRAME_LEVELS,
@@ -357,6 +359,174 @@ def test_a_bounded_pending_buffer_reports_what_it_evicted(client, chain):
     assert status["pending_dropped"] == 6
     # 环形预算之外还得有这道闸：`max_gateways` 超出的接入机整个不收，并说得出收了几台。
     assert status["gateways"] == 1
+
+
+class TableTransport:
+    """真 `BridgeEndpointResolver` 要的那一次 HTTP：表内容可换，敲了几次看得见。"""
+
+    def __init__(self, table: list[dict] | None = None) -> None:
+        self.table = list(table or [])
+        self.calls: list[str] = []
+
+    def fetch(self, url: str, timeout_s: float) -> FetchResult:
+        self.calls.append(url)
+        return FetchResult(200, {"endpoints": list(self.table)}, 12, None)
+
+
+def test_an_unlisted_endpoint_is_asked_again_the_next_round(client, chain, db_path, monkeypatch):
+    """桥表里还没有这条 ep 时，缓存未命中本身就是重取的触发器——下一拍再问一次。
+
+    这条走的是**真** `BridgeEndpointResolver`：本文件其余用例都换成 `FakeResolver`，于是
+    "按网关缓存整表"那条纪律从来没被钉过。2026-11-11 的真机账目正是从这个洞出来的：板子刚
+    插上时桥的端点表里还没有它，`transport_addr` 一直是 `None`，`_node_for` 归不了属，而节点
+    行**早就在库里**——问题不在节点表，在地址那一步。等满一个 `capture_endpoint_ttl_s`
+    （30 s = 6 拍）的代价是这条流的点数挤满 `capture_pending_per_endpoint` 的预算，
+    `attributed_late` 每次正好加满一个预算、其余整批进 `pending_dropped`。
+
+    现在的口径（用户 2026-11-11 拍板）：**攒着点、又还不知道地址**的端点每拍都值得再敲一次桥
+    （`pending_keys` 就只递这种端点过来），但同一拍里刚答过的那份表不算"旧"，不许再敲第二遍。
+    判据按 `transport.calls` 的次数走：它说得出"这段时间敲了几次桥"，比墙上的时间好核对。
+
+    后半段把节点行删掉一次，是为了让端点明细那三格把**两种成因**分开说：桥说不出地址
+    （`transport_addr` 为 `None`，第二格问都没法问）与地址有了但节点表还没这行
+    （`addr_in_node_table` 为 `False`）在现场是两句完全不同的话。删完先空跑一拍，是让
+    `_refs` 赶上那次删除——否则 `_observe` 会拿上一拍的归属表把点直接发出去，测的就不是
+    "地址有了而归属表没这行"，而是"归属表还旧"。
+    """
+    clock = Clock()
+    monkeypatch.setattr(capture_module, "monotonic", clock)
+    main = chain["main"]
+    with client.app.state.db.scope() as session:
+        gateway = session.get(Gateway, main["gateway_id"])
+        gateway.base_url = "http://192.168.99.111:8011"
+
+    listed = {
+        "id": main["ep"],
+        "kind": "serial",
+        "label": "A",
+        "path": main["addr"],
+        "online": True,
+        "busy": False,
+    }
+    transport = TableTransport()  # 桥表为空：页面刚打开，端点还没登进表
+    resolver = capture_module.BridgeEndpointResolver(
+        client.app.state.db,
+        transport,
+        Settings(db_path=db_path, capture_endpoint_ttl_s=30.0, capture_flush_interval_s=5.0),
+    )
+    pipeline = make_pipeline(client, resolver=resolver)
+
+    # 第一拍：常规刷新答不出这条 ep，但那份表就是这一拍刚拿的——同拍不许再敲第二次
+    pipeline.feed(main["gateway_id"], main["ep"], METRICS)
+    pipeline.drain_all()
+    assert pipeline.tick()["attributed"] == 0
+    status = pipeline.status()
+    assert len(transport.calls) == 1, "这一拍刚答过的那份表不算旧：同拍再敲一次是纯无谓"
+    first = status["endpoint_stats"][0]
+    assert (first["transport_addr"], first["addr_in_node_table"], first["pending"]) == (None, None, 3)
+
+    # 桥把端点登进表了。TTL（30 s）还远没到，但下一拍就该再问一次——修法本身就在这一段
+    transport.table = [listed]
+    clock.advance(5.0)
+    pipeline.feed(main["gateway_id"], main["ep"], METRICS)
+    pipeline.drain_all()
+    assert pipeline.tick()["attributed"] == 6, "缓存未命中要成为重取的触发器：等满一个 TTL 才归属是旧口径"
+    assert len(transport.calls) == 2
+    answered = pipeline.status()
+    assert (answered["pending_points"], answered["pending_dropped"]) == (0, 0)
+    assert answered["endpoint_stats"][0]["transport_addr"] == main["addr"]
+
+    # 地址有了但节点表那一行还没落：同一格 `unattributed`，另一种成因。
+    # 地址既然答过了，这一拍起桥就**一次都不该再敲**——`pending_keys` 只递"还不知道地址"的流。
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("DELETE FROM node WHERE node_id = ?", (main["node_id"],))
+        conn.commit()
+    clock.advance(5.0)
+    pipeline.tick()  # 先空跑一拍，把 `_refs` 对上那次删除
+    assert len(transport.calls) == 2, "点都归上了就没有要问的端点：这一拍一次桥都不该敲"
+    pipeline.feed(main["gateway_id"], main["ep"], METRICS)
+    pipeline.drain_all()
+    assert pipeline.tick()["attributed"] == 0
+    missing_row = next(
+        row for row in pipeline.status()["endpoint_stats"] if row["endpoint"] == main["ep"]
+    )
+    assert (missing_row["transport_addr"], missing_row["addr_in_node_table"], missing_row["pending"]) == (
+        main["addr"],
+        False,
+        3,
+    )
+    assert len(transport.calls) == 2, "卡在归属表而不是桥：再敲桥问不出这一行"
+    assert pipeline.pending_keys() == (), (
+        "地址已经认领下来了就不该再进“要问桥”那份名单：问得出答案的流不去问，有界重取的代价"
+        "才是零。这条盯的是名单本身——那种流桥答得上来，多敲一次也测不出差别"
+    )
+
+    # `ingest` 那一拍把行落回来，攒下的三帧整批出仓，一个点都没丢。
+    # 落回来的是**新** `node_id`（`ingest` 对重插的板就这个口径），所以断言按现在的行读。
+    with client.app.state.db.scope() as session:
+        reconcile(
+            session, session.get(Gateway, main["gateway_id"]), [listed],
+            Settings(max_nodes_per_gateway=8),
+        )
+    landed = client.get(f"/api/nodes?gateway={main['gateway_id']}").json()[0]["node_id"]
+    clock.advance(5.0)
+    assert pipeline.tick()["attributed"] == 3
+    assert len(transport.calls) == 2, "节点行回来了不该再敲桥：地址那格已经答过了"
+    late = pipeline.status()
+    assert (late["attributed_late"], late["pending_dropped"]) == (9, 0)
+    assert {row.node_id for row in summary_rows(client)} == {main["node_id"], landed}, (
+        "摘要按**归属那一刻**的行落：前两拍归给的是删除前的 node 1，这一拍出仓的三点归新落回来的那行"
+    )
+
+
+def test_an_endpoint_the_bridge_never_lists_costs_one_extra_fetch_a_round(
+    client, chain, db_path, monkeypatch
+):
+    """桥**永远**答不上来的那条流：每拍恰好多敲一次，既不是一拍两次，也不是从此不敲。
+
+    有界重取换来的是"下一拍就问到"，代价是桥多挨 `/api/endpoints`。这条用例钉的就是那个
+    上限：`pending_keys` 每拍把还攒着点、又没地址的端点递进来一次，一个网关一次请求（不管
+    这一拍里有几条这样的流），而端点散掉之后一敲都不许有。
+    """
+    clock = Clock()
+    monkeypatch.setattr(capture_module, "monotonic", clock)
+    main = chain["main"]
+    with client.app.state.db.scope() as session:
+        gateway = session.get(Gateway, main["gateway_id"])
+        gateway.base_url = "http://192.168.99.111:8011"
+
+    transport = TableTransport()
+    resolver = capture_module.BridgeEndpointResolver(
+        client.app.state.db,
+        transport,
+        Settings(db_path=db_path, capture_endpoint_ttl_s=30.0, capture_flush_interval_s=5.0),
+    )
+    pipeline = make_pipeline(client, resolver=resolver)
+
+    for expected in range(1, 5):
+        if expected > 1:
+            clock.advance(5.0)
+        pipeline.feed(main["gateway_id"], main["ep"], METRICS)
+        pipeline.feed(main["gateway_id"], "serial:/dev/never-listed", METRICS)
+        pipeline.drain_all()
+        assert pipeline.tick()["attributed"] == 0
+        assert len(transport.calls) == expected, (
+            "一拍里给同一个网关敲两次是错的（刚答过的表不算旧），"
+            "答不上就从此不再敲也是错的（下一拍桥也许就登表了）"
+        )
+    status = pipeline.status()
+    assert (status["pending_points"], status["pending_dropped"]) == (24, 0), (
+        "两条流各 4 帧 3 点，全在预算 512 之内：一个点都不许掉"
+    )
+
+    # 两条流都散了就没人在等：这一拍之后桥一次都不敲
+    for ep in (main["ep"], "serial:/dev/never-listed"):
+        pipeline.untap(Link(gateway_id=main["gateway_id"], ep=ep, url="ws://x/uart"))
+    clock.advance(5.0)
+    pipeline.tick()
+    assert len(transport.calls) == 4, "没有待归属的点就不要再问桥：这是有界的另一半"
+
+
 
 
 # --- 来源：回放的数据不能伪装成实时的 ----------------------------------------
@@ -866,7 +1036,13 @@ def test_endpoint_detail_names_which_link_a_frame_came_from(client, chain):
         assert set(row) == {
             "endpoint", "gateway_id", "source", "frames", "skipped",
             "crc_errors", "resync_bytes", "last_frame_mono",
+            # 后三格回答"这条流为什么没进摘要"（2026-11-11 那条真机推测补出来的）：
+            # 桥说不出地址 / 地址有了但节点表没这行 / 只是这一拍还没轮到，三态各一个读法。
+            "transport_addr", "addr_in_node_table", "pending",
         }
+        # 这里用的是空表 `FakeResolver`：两条流都卡在"桥还没说地址"那一态。
+        assert (row["transport_addr"], row["addr_in_node_table"]) == (None, None)
+        assert row["pending"] == 3, "一帧 METRICS 三个点，全都该在这一条流名下数得出来"
     # 另一条已经没了：会话散了就不能在明细里留一个 0 帧的尸首
     pipeline.untap(Link(gateway_id=away["gateway_id"], ep=away["ep"], url="ws://x/uart"))
     assert {r["endpoint"] for r in pipeline.status()["endpoint_stats"]} == {main["ep"]}

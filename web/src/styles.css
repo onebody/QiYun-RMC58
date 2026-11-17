@@ -603,43 +603,67 @@ main.shared { padding-top: 0; }
   .power-table th, .power-table td { padding-right: 8px; }
 }
 
-/* ---- Device management dialog (netDialog.ts) ------------------------------ */
+/* ---- Device management dialog (netDialog.ts) --------------------------------
+   Two columns: the form on the left, what the relay reports on the right. The
+   whole panel is not one long strip; only .net-body scrolls. Below 760 px the
+   columns stack, so narrow windows still get the full width per section. */
 .net-dialog {
-  border: 0; border-radius: 14px; padding: 22px 26px; max-width: 520px; width: min(520px, 94vw);
-  background: var(--surface, #1a1d21); color: var(--ink-1, #e6e6e6);
+  border: 0; border-radius: 14px; padding: 22px 26px; max-width: 920px; width: min(920px, 96vw);
+  max-height: min(88vh, 760px); overflow: hidden;
+  background: var(--surface); color: var(--ink);
   box-shadow: 0 16px 48px rgba(0,0,0,.45);
 }
+.net-dialog[open] { display: flex; flex-direction: column; }
 .net-dialog::backdrop { background: rgba(0,0,0,.55); backdrop-filter: blur(2px); }
-.net-dialog h2 { font-size: 18px; margin: 0 0 14px; }
-.net-dialog h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted, #888); margin: 16px 0 8px; }
-.net-section label { display: block; font-size: 12px; color: var(--muted, #888); margin: 10px 0 3px; }
-.net-section input, .net-section select {
-  width: 100%; padding: 6px 8px; border-radius: 6px;
-  border: 1px solid var(--surface-3, #3a3a3a);
-  background: var(--surface-2, #2a2a2a); color: var(--ink-1, #e6e6e6);
-  font-size: 13px; box-sizing: border-box;
+.net-dialog form { display: flex; flex-direction: column; min-height: 0; }
+.net-dialog h2 { font-size: 18px; margin: 0 0 2px; }
+.net-dialog .net-subtitle { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+.net-body {
+  display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+  gap: 0 32px; min-height: 0; overflow-y: auto; padding-right: 2px;
 }
-.net-section input[type=password] { font-family: monospace; }
-.net-section .hint { color: var(--muted, #888); font-size: 12px; margin: 6px 0 10px; }
+.net-col + .net-col { border-left: 1px solid var(--border); padding-left: 32px; }
+.net-dialog h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+.net-section + .net-section { margin-top: 20px; }
+.net-section label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 3px; }
+.net-section input, .net-section select {
+  width: 100%; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--ink); font-size: 13px; box-sizing: border-box;
+}
+.net-section input:focus, .net-section select:focus { outline: none; border-color: var(--accent); }
+.net-section input[type=password] { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.net-ssid-man { margin-top: 6px; }
+.net-section .hint { color: var(--muted); font-size: 12px; line-height: 1.45; margin: 6px 0 10px; }
 .net-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
-.net-actions button { padding: 7px 14px; border-radius: 6px; border: 1px solid var(--surface-3, #3a3a3a); background: var(--surface-2, #2a2a2a); color: var(--ink-1, #e6e6e6); cursor: pointer; font-size: 13px; }
-.net-actions button.primary { background: var(--accent, #4a8); border-color: var(--accent, #4a8); color: #000; font-weight: 600; }
-.net-actions button:hover:not(:disabled) { background: var(--surface-3, #3a3a3a); }
-.net-actions button:disabled { opacity: .5; cursor: default; }
-.net-save-log { font-size: 12px; margin-top: 8px; color: var(--accent, #4a8); }
-.net-save-log.err { color: var(--warn, #e55); }
+.net-actions button, .dialog-footer button {
+  padding: 7px 14px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface-2); color: var(--ink); cursor: pointer; font-size: 13px;
+}
+.net-actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.net-actions button:hover:not(:disabled), .dialog-footer button:hover {
+  background: color-mix(in srgb, var(--surface-2) 60%, var(--ink) 8%);
+}
+.net-actions button:disabled { opacity: .45; cursor: default; }
+.net-save-log { font-size: 12px; line-height: 1.45; margin-top: 8px; color: var(--good); min-height: 16px; overflow-wrap: anywhere; }
+.net-save-log.err { color: var(--critical); }
 .net-status-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; font-size: 13px; }
-.kv { display: flex; align-items: center; gap: 6px; }
-.kv > span:first-child { color: var(--muted, #888); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
-.kv > span:last-child { color: var(--ink-1, #e6e6e6); font-variant-numeric: tabular-nums; }
-.chip { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; }
-.chip.up { background: rgba(76, 170, 136, .18); color: var(--accent, #4a8); }
-.chip.down { background: rgba(229, 85, 85, .15); color: var(--warn, #e55); }
-.chip.dial { background: rgba(255, 193, 7, .15); color: #e9a84c; }
-.chip.q { background: rgba(140, 140, 140, .15); color: var(--muted, #888); }
-.dialog-footer { display: flex; justify-content: flex-end; margin-top: 18px; gap: 8px; }
-.dialog-footer button { padding: 7px 16px; border-radius: 6px; border: 1px solid var(--surface-3, #3a3a3a); background: var(--surface-2, #2a2a2a); color: var(--ink-1, #e6e6e6); cursor: pointer; }
-.dialog-footer button:hover { background: var(--surface-3, #3a3a3a); }
+.kv { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.kv > span:first-child { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; flex: none; }
+.kv > span:last-child { color: var(--ink); font-variant-numeric: tabular-nums; min-width: 0; overflow-wrap: anywhere; }
+.kv.wide { grid-column: 1 / -1; align-items: baseline; }
+/* An empty row (no IP yet, no last error) would only add a gap. */
+.kv.wide:has(> span:last-child:empty) { display: none; }
+.chip { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+.chip.up { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.chip.down { background: color-mix(in srgb, var(--critical) 16%, transparent); color: var(--critical); }
+.chip.dial { background: color-mix(in srgb, var(--warning) 18%, transparent); color: var(--warning); }
+.chip.q { background: color-mix(in srgb, var(--muted) 16%, transparent); color: var(--muted); }
+.dialog-footer { display: flex; justify-content: flex-end; margin-top: 18px; gap: 8px; flex: none; }
+@media (max-width: 760px) {
+  .net-dialog { padding: 18px; }
+  .net-body { grid-template-columns: minmax(0, 1fr); }
+  .net-col + .net-col { border-left: 0; padding-left: 0; margin-top: 20px; }
+}
 
 /* ---- Device list (deviceList.ts) ----------------------------------------- */
 .device-list {
@@ -649,6 +673,9 @@ main.shared { padding-top: 0; }
   box-shadow: 0 16px 48px rgba(0,0,0,.5);
   display: flex; flex-direction: column; overflow: hidden;
 }
+/* The rule above beats the UA's closed-dialog display:none, so a dialog that
+ * was never opened would sit in the page flow as an empty box. */
+.device-list:not([open]) { display: none; }
 .device-list::backdrop { background: rgba(0,0,0,.55); backdrop-filter: blur(2px); }
 .device-list__header {
   display: flex; align-items: center; justify-content: space-between;
@@ -736,3 +763,95 @@ main.shared { padding-top: 0; }
 .device-card__btn--manage:hover:not(:disabled) {
   background: rgba(255, 183, 77, .22);
 }
+
+/* Monitor workspace: the cards become panels on a 12-column grid. In free
+ * mode they are absolutely placed from saved cells; in stack mode the old
+ * 12-column grid flow is kept (the panel body is display:contents). */
+main.workspace.free {
+  display: block;
+  position: relative;
+}
+main.workspace.stack { position: relative; }
+main.workspace.free .panel {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  z-index: 0;
+}
+main.workspace.free .panel.dragging {
+  z-index: 2;
+  outline: 1px dashed var(--accent);
+}
+main.workspace.free .panel.collapsed {
+  z-index: 1;
+}
+.panel-head {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+body.panel-dragging,
+body.panel-dragging * { cursor: grabbing !important; user-select: none; }
+.panel-head .panel-actions { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.panel-head:not(:has(.tools)) .panel-actions { margin-left: auto; }
+.panel-collapse {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  padding: 0 5px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.panel-collapse:hover:not(:disabled) { color: var(--ink); border-color: var(--border); }
+.panel-body { display: contents; }
+.panel.collapsed .panel-body { display: none; }
+main.workspace.free .panel.collapsed .panel-body { display: none; }
+main.workspace.free .panel .panel-head { flex: none; margin-bottom: 8px; }
+main.workspace.free .panel .panel-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+main.workspace.free .panel .panel-body > .chart {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 60px;
+}
+main.workspace.free .panel .panel-body > .h-pano { flex: 3 1 0; }
+main.workspace.free .panel .panel-body > .h-water { flex: 2 1 0; }
+main.workspace.free .panel .panel-body > .h-pano { min-height: 120px; }
+main.workspace.free .panel .panel-body > .h-water { min-height: 90px; }
+.panel-resize { display: none; }
+main.workspace.free .panel:not(.collapsed) .panel-resize {
+  display: block;
+  position: absolute;
+  right: 1px;
+  bottom: 1px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
+}
+.panel-resize::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+}
+.panel-resize:hover::after { border-color: var(--ink); }
+.panel-drop {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  border: 2px dashed var(--accent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.panel-drop[hidden] { display: none; }

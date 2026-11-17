@@ -26,8 +26,14 @@ from app.services.ingest import reconcile
 SERIAL_EP = "serial:/dev/widscan58-A"
 SERIAL_ADDR = "/dev/widscan58-A"
 
-#: 固件现形：target / proto / fw / HEAD 时间 / PHY（PHY 里可能带空格）。
-INFO_CURRENT = "INFO widscan58|esp32-c5|1|0.6.0|2026-11-01T02:03:04Z|ESP32-C5 SPH 8.1.2"
+#: 固件现形（`firmware/src/proto/commands.c:450`）：target / proto / fw / HEAD 时间 / PHY
+#: / eFuse MAC / 启动毫秒。PHY 里可能带空格，所以它只能排在 MAC 之前。
+INFO_CURRENT = (
+    "INFO widscan58|esp32-c5|1|0.6.0|2026-11-01T02:03:04Z|ESP32-C5 SPH 8.1.2"
+    "|aa:bb:cc:dd:ee:ff|4711"
+)
+#: 只有六段的形：MAC 与 uptime 那两格还没报出来，两者都必须留 `None` 而不是空串或 0。
+INFO_NO_MAC = "widscan58|esp32-c5|1|0.6.0|2026-11-01T02:03:04Z|ESP32-C5 SPH 8.1.2"
 #: 老固件的空格分隔形，只有五段且没有 HEAD 时间。
 INFO_LEGACY = "INFO widscan58 esp32-c5 1 0.5.2 8.1.1"
 
@@ -35,7 +41,7 @@ INFO_LEGACY = "INFO widscan58 esp32-c5 1 0.5.2 8.1.1"
 # --- 纯解析：一份行文本，不含任何 I/O -----------------------------------------
 
 
-def test_the_current_info_line_yields_all_five_identity_fields():
+def test_the_current_info_line_yields_every_field_the_board_reports():
     info = parse_info_line(INFO_CURRENT)
     assert info == {
         "target": "esp32-c5",
@@ -43,7 +49,18 @@ def test_the_current_info_line_yields_all_five_identity_fields():
         "fw_version": "0.6.0",
         "commit_time": "2026-11-01T02:03:04Z",
         "phy_version": "ESP32-C5 SPH 8.1.2",
+        "mac": "aa:bb:cc:dd:ee:ff",
+        "uptime_ms": 4711,
     }
+
+
+def test_the_optional_tail_segments_stay_none_when_the_board_omits_them():
+    """六段形（MAC/uptime 尚未报出）不许把缺格补成空串或 0。"""
+    info = parse_info_line(INFO_NO_MAC)
+    assert info["fw_version"] == "0.6.0"
+    assert info["phy_version"] == "ESP32-C5 SPH 8.1.2"
+    assert info["mac"] is None
+    assert info["uptime_ms"] is None
 
 
 def test_the_phy_version_keeps_its_spaces():

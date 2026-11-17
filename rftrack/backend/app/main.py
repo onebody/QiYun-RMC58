@@ -32,6 +32,7 @@ from .database import Database
 from .routers import (
     archive,
     bridge,
+    entry,
     events,
     gateways,
     health,
@@ -54,6 +55,7 @@ from .services.alerts import AlertEngine
 from .services.capture import CapturePipeline
 from .services.dialer import DialCoordinator, HttpTransport
 from .services.live import LiveHub
+from .services.node_control import NodeControl
 from .services.plugin_runtime import PluginRuntime
 from .services.replay import ReplayRunner
 from .services.retention import RetentionRunner
@@ -129,6 +131,10 @@ def create_app(
         db, settings, transport=app_transport, publisher=live, plugins=plugin_runtime
     )
     hub = BridgeHub(upstream_factory or WebsocketFactory(), observer=capture)
+    #: 节点级命令下发（站点工作台的控制格子）：它**不开第二条上游**，走桥的 `acquire`/`release`
+    #: 与页面共用一条会话、一把写锁，所以采集层照样看得见这些字节。建在桥之后是因为它要问桥
+    #: "这条端点现在有没有人握着"——会停 RotorHazard 的板只有那时才允许再搭一个使用者（R21）。
+    control = NodeControl(db, settings, hub, app_transport)
     #: 保留清理：`retention_*` 那两个键从 S4 起就有生效值，这个 runner 是它们第一次真的删数据。
     retention = RetentionRunner(db, settings)
     #: 告警引擎：读 `plugin_finding` 按规则落 `alert`。它不自己起上游，判定有没有新货由
@@ -154,6 +160,8 @@ def create_app(
         await retention.start()
         await capture.start()
         await replay.start()
+        # 命令通路起在采集之后：它交还端点那一下要撤采集的观察钩子，观察者得先在。
+        await control.start()
         # 插件循环起在最后：它吃的是采集层那侧的产物，而注册表要先同步、采集层要先存在，
         # 它才有批可消费。缺表就整段跳过（判据与上面 `registry.sync` 同一个）——运行时
         # `start()` 在起循环之前就要 `refresh()` 读一次注册表，那一读撞 `no such table`
@@ -176,6 +184,10 @@ def create_app(
         await alert_engine.stop()
         await plugin_runtime.stop()
         await replay.stop()
+        # 命令通路先于采集停：它一停就把还握着的端点交还给桥（否则进程没了串口还占着，
+        # RotorHazard 起不来），而交还那一下要撤采集的观察钩子——采集先收摊就撤到一个
+        # 不再认这条端点的观察者上。
+        await control.stop()
         await capture.stop()
         await retention.stop()
         await dialer.stop()
@@ -189,6 +201,7 @@ def create_app(
     app.state.transport = app_transport
     app.state.dialer = dialer
     app.state.bridge = hub
+    app.state.control = control
     app.state.capture = capture
     app.state.plugins = plugin_runtime
     app.state.retention = retention
@@ -204,6 +217,9 @@ def create_app(
     #: 原 Console 挂在 `/app/`：同一套"可选件缺失不算故障"的判据（见 `mount_console`）。
     app.state.console = mount_console(app, settings)
 
+    #: 根上的入口页排在两次挂载之后：它不自己判"这一页在不在"，只把上面那两份结果翻译成链接
+    #: 或理由（`routers/entry.py`）。注册顺序在这里不是要求，写在这里是为了让人看见同源这件事。
+    app.include_router(entry.router)
     app.include_router(health.router)
     app.include_router(sites.router)
     app.include_router(relays.router)

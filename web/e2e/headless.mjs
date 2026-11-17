@@ -216,6 +216,17 @@ for (const c of [
   await timerCmd(c);
 await page.evaluate((m) => window.widscan58.app.timer.setMetric(m), saved0.metrics);
 await page.evaluate(() => window.widscan58.app.timer.saveDefaults());
+// A startMode re-run while RH polling is active (the watchdog/reconnect race):
+// a polled link does not answer PROTOCOL?, and that timeout must not be read
+// as "legacy firmware" and demote the timer page to monitor.
+await page.evaluate(() => window.widscan58.startMode(window.widscan58.app.device));
+await sleep(2500);
+r = await timerSnap();
+check(
+  "timer survives a startMode re-run during RH polling",
+  r.mode === "timer" && r.rhLink && r.running && r.pageShown,
+  JSON.stringify({ mode: r.mode, rhLink: r.rhLink, running: r.running, error: r.error }),
+);
 await menuPick("Monitor mode");
 await sleep(3000);
 s = await snap();

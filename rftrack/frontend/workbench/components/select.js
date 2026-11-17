@@ -21,6 +21,8 @@
  *
  * 组件画这段话用的是 `parts.js` 的 `empty()`/`statePill()`——牌子拿 `label`、正文拿 `text`，
  * 两边都出自这里，所以"空状态说什么"与"牌子上说什么"不会是两句话。
+ *
+ * 写侧另有一条 `controlTarget()`：读侧可以一格画八块板，**写侧一格只认一块**，理由见它自己。
  */
 
 export const STATE = {
@@ -89,6 +91,44 @@ export function nodeScope(deps, widget) {
     else missing.push(id);
   }
   return { boards, missing, multi: true };
+}
+
+/**
+ * 写侧的目标板：**控制是单写者，一格只对一块板下发**（后端每端点一把命令锁，
+ * 桥那边还有页面之间的写者仲裁）。所以这里与 `nodeScope` 的读侧口径有意不同：
+ *
+ * - `nodes` 没勾 → 跟着四级选择器选中的那块板走。切板即切控制对象，这是站点侧的常态。
+ * - `nodes` 勾了一块 → 就固定在那一块，切别处不影响它。
+ * - `nodes` 勾了多块 → **拒绝下发并说清怎么改**。广播一条 `GAIN` 到八块板不是"多点控制"，
+ *   是把一次误操作放大八倍；而"挑第一块"是替运营者做了他没做的决定。
+ *
+ * 回 `{ board, boards, missing, multi, blocked, text }`：`blocked` 非空时 `board` 一定是 null，
+ * 组件照着 `text` 说话即可，不必再判一遍。
+ */
+export function controlTarget(deps, widget) {
+  const scope = nodeScope(deps, widget);
+  const base = { boards: scope.boards, missing: scope.missing, multi: scope.multi };
+  if (!scope.boards.length) {
+    return {
+      ...base,
+      board: null,
+      blocked: "no_board",
+      text: scope.missing.length
+        ? `这一格勾的节点 ${scope.missing.join("、")} 不在名册里：先在属性面板里改回来`
+        : "没有选中的板：控制要有对象才发得出去",
+    };
+  }
+  if (scope.boards.length > 1) {
+    return {
+      ...base,
+      board: null,
+      blocked: "multi",
+      text: `控制是单写者，这一格勾了 ${scope.boards.length} 块板（${scope.boards
+        .map((row) => row.display_name)
+        .join("、")}）：在属性面板的 nodes 里只留一块`,
+    };
+  }
+  return { ...base, board: scope.boards[0], blocked: null, text: null };
 }
 
 /** 电平帧能力：只有 `supported === true` 才算声明了。`null`（不认识）与缺失都算没声明。 */

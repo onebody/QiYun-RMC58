@@ -23,87 +23,19 @@ import test from "node:test";
 import * as registry from "../registry.js";
 import { IMPLEMENTED, build, declaredWithoutImpl, implWithoutDeclared } from "../components/index.js";
 import { connected, eventFrame, eventRow, point, samplesFrame } from "./support/live-fixture.mjs";
+import {
+  clickNode,
+  fakeCanvas,
+  fakeRt,
+  fakeWidget,
+  findByClass,
+  hasClass,
+  stubComputedStyle,
+  textOf,
+  walk,
+} from "./support/vue-fixture.mjs";
 
-// --- 假 Vue -------------------------------------------------------------------
-
-function fakeRt() {
-  const h = (tag, props, children) => {
-    if (Array.isArray(props) || typeof props === "string" || typeof props === "number") {
-      children = props;
-      props = {};
-    }
-    return { tag, props: props || {}, children: children === undefined ? null : children };
-  };
-  const hooks = { mounted: [], updated: [] };
-  const refs = [];
-  return {
-    h,
-    /** 记下每个 `ref`：绘制路径要能把画布"挂"上去，否则 `paint()` 永远走 early return，测不到。 */
-    ref: (value) => { const r = { value }; refs.push(r); return r; },
-    computed: (fn) => ({ get value() { return fn(); } }),
-    onMounted: (fn) => hooks.mounted.push(fn),
-    onUpdated: (fn) => hooks.updated.push(fn),
-    nextTick: (fn) => { if (fn) fn(); return Promise.resolve(); },
-    watchEffect: (fn) => fn(),
-    hooks,
-    refs,
-  };
-}
-
-/** 只记录调用序列的 2D 上下文：够 `chart.draw()` 跑完，不需要真画像素。 */
-function fakeCanvas({ w = 240, h = 120 } = {}) {
-  const ops = [];
-  const ctx = new Proxy({ ops }, {
-    get(target, key) {
-      if (key in target) return target[key];
-      if (key === "canvas") return { width: w, height: h };
-      return (...args) => { ops.push([key, ...args]); };
-    },
-    set(target, key, value) { target[key] = value; return true; },
-  });
-  return { clientWidth: w, clientHeight: h, style: {}, getContext: () => ctx, ops };
-}
-
-/** `paint()` 会从样式表取色；这是浏览器才有的那一格，Node 里给一个空实现即可（取色有 fallback）。 */
-if (!globalThis.getComputedStyle) {
-  globalThis.getComputedStyle = () => ({ getPropertyValue: () => "" });
-}
-
-const walk = (node) => {
-  if (node === null || node === undefined) return [];
-  if (Array.isArray(node)) return node.flatMap(walk);
-  if (typeof node !== "object" || !node.tag) return [];
-  return [node, ...walk(node.children)];
-};
-
-/** 把树上所有文字拼起来：文案判据（不是频谱、系统不提供）就在这里断。 */
-const textOf = (node) => {
-  const parts = [];
-  const visit = (value) => {
-    if (typeof value === "string" || typeof value === "number") parts.push(String(value));
-    else if (Array.isArray(value)) value.forEach(visit);
-    else if (value && typeof value === "object") visit(value.children);
-  };
-  visit(node);
-  return parts.join(" ");
-};
-
-const hasClass = (node, name) => {
-  const value = node.props.class;
-  if (typeof value === "string") return value.split(/\s+/).includes(name);
-  if (Array.isArray(value)) return value.filter(Boolean).some((part) => part.split(/\s+/).includes(name));
-  return false;
-};
-
-const findByClass = (root, name) => walk(root).filter((node) => hasClass(node, name));
-
-function clickNode(root, matcher) {
-  const target = walk(root).find((node) => node.props && matcher(node));
-  assert.ok(target, "要点的节点没找到：结构变了，判据也就断了");
-  assert.equal(typeof target.props.onClick, "function", "这个节点没有 onClick，等于点不动");
-  target.props.onClick({ target: { checked: true, value: "" }, stopPropagation() {}, preventDefault() {} });
-  return target;
-}
+stubComputedStyle();
 
 /**
  * 「不许出现 X」这类判据不能整棵树一刀切：规范要求的**否定句本身**就带着那些字
@@ -124,38 +56,6 @@ function assertNoInference(node) {
 }
 
 // --- 假依赖 -------------------------------------------------------------------
-
-function fakeLease() {
-  const timers = [];
-  const hooks = [];
-  const subs = [];
-  return {
-    timers,
-    hooks,
-    setTimeout(fn, ms) { timers.push({ fn, ms, kind: "timeout" }); return timers.length; },
-    setInterval(fn, ms) { timers.push({ fn, ms, kind: "interval" }); return timers.length; },
-    clearTimeout() {},
-    subscribe(topic, handler) { subs.push({ topic, handler }); return () => subs.splice(subs.findIndex((row) => row.handler === handler), 1); },
-    onRelease(fn) { hooks.push(fn); return () => hooks.splice(hooks.indexOf(fn), 1); },
-    live: () => timers.length + subs.length,
-    release() { hooks.forEach((fn) => fn()); timers.length = 0; subs.length = 0; },
-  };
-}
-
-const fakeWidget = (pluginId, overrides = {}) => ({
-  instance_id: `${pluginId}-1`,
-  plugin_id: pluginId,
-  x: 0, y: 0, w: 6, h: 4,
-  sort: 0,
-  config: {},
-  server_config: {},
-  effective: {},
-  declaration_error: null,
-  missing: false,
-  isNew: false,
-  lease: fakeLease(),
-  ...overrides,
-});
 
 const emptyContext = {
   sites: [], relays: [], gateways: [], nodes: [], scopeNodes: [], scopeGateways: [],

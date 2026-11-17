@@ -3,11 +3,26 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
+from .models import to_utc
 from .services.network import require_lan_base_url
+
+
+#: 出参里的时刻一律带偏移。SQLite 读回来是 naive（`models.to_utc` 的注释钉住了这条实测），
+#: 而裸的 `2026-11-11T06:40:41` 会被浏览器按本地时区解释——本机 UTC+8 实测偏出 16 小时：
+#: 库里 06:40 UTC 的 `node.last_seen`，页面"最近"那格显示成前一天 22:40。
+#: 只在 JSON 侧换算，`model_dump()` 的 python 侧仍是 datetime，内部比较不受影响。
+IsoUtc = Annotated[
+    datetime,
+    PlainSerializer(
+        lambda moment: to_utc(moment).isoformat(),
+        return_type=str,
+        when_used="json",
+    ),
+]
 
 
 class ORMModel(BaseModel):
@@ -40,10 +55,10 @@ class SiteOut(ORMModel):
     origin: str
     retention_events_days: int | None
     retention_summary_days: int | None
-    last_sync_at: datetime | None
+    last_sync_at: IsoUtc | None
     lag_s: int | None
-    created_at: datetime
-    updated_at: datetime
+    created_at: IsoUtc
+    updated_at: IsoUtc
 
 
 class RelayCreate(BaseModel):
@@ -64,8 +79,8 @@ class RelayOut(ORMModel):
     name: str
     note: str | None
     status: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: IsoUtc
+    updated_at: IsoUtc
 
 
 class LanBaseUrlMixin(BaseModel):
@@ -106,7 +121,7 @@ class GatewayOut(ORMModel):
     dial_state: str | None
     dial_reason: str | None
     dial_failures: int
-    last_seen: datetime | None
+    last_seen: IsoUtc | None
 
 
 class NodeOut(BaseModel):
@@ -133,7 +148,7 @@ class NodeOut(BaseModel):
     #: 这块板的时钟可信到什么程度：`unsynced` 是一句事实陈述，不是缺数据。
     time_sync_quality: str = "unsynced"
     status: str
-    last_seen: datetime | None
+    last_seen: IsoUtc | None
     stops_rh: bool
 
 
@@ -147,6 +162,18 @@ class NodeDeclaration(BaseModel):
     capabilities: dict | None = None
     fw_version: str | None = Field(default=None, max_length=64)
     protocol_version: int | None = Field(default=None, ge=0, le=255)
+
+
+class NodeCommand(BaseModel):
+    """`POST /api/nodes/{id}/command` 的入参：一行原样发给板子的命令。
+
+    **这里不设 `max_length`、也不做 strip**：长度与非 ASCII 的拒绝要带 `reason=command_invalid`
+    和固件那个 126 的上限（`services/node_control.py`），而 Pydantic 的长度错吐的是它自己的
+    数组体，页面按 `reason` 分支就得为这一个端点写特例。归一化同样不做——发出去的就是
+    操作员打的那一行。
+    """
+
+    command: str
 
 
 # --- S4：设置系统与布局 -------------------------------------------------------
@@ -214,8 +241,8 @@ class LayoutOut(ORMModel):
     degraded: bool = False
     degrade_reason: str | None = None
     widget_count: int = 0
-    created_at: datetime
-    updated_at: datetime
+    created_at: IsoUtc
+    updated_at: IsoUtc
 
 
 class WidgetUpdate(BaseModel):

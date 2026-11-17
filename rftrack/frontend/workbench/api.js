@@ -154,6 +154,12 @@ export function createApi(options = {}) {
     gateways: (siteId) => get("/api/gateways", { site: siteId }),
     nodes: ({ site, gateway } = {}) => get("/api/nodes", { site, gateway }),
     endpoints: (gatewayId) => get("/api/endpoints", { gateway: gatewayId }),
+    /**
+     * 节点级命令下发：一行原样交给板子，等它自己回答（后端 `services/node_control.py`）。
+     * 与别的写端点不同——**它不落库**，而且板子拒绝（`ERR …`）是 200 带 `ok:false`，
+     * 不是 HTTP 错误：页面要把板子的原话画出来，而不是当成"请求失败"。
+     */
+    nodeCommand: (nodeId, command) => send("POST", `/api/nodes/${nodeId}/command`, { command }),
 
     /** 建库三步（S2 的写侧本来就有，这里补上调用口）：不成功就把 reason 交给页面说人话。 */
     createSite: (payload) => send("POST", "/api/sites", payload),

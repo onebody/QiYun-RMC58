@@ -226,6 +226,12 @@ class BridgeEndpointResolver:
 
     表拉不通时**继续用上一次的答案**：一次网络抖动不该让已经归好属的端点退回未归属，
     而"多久没成功刷新"另有 `last_error` 与 `failures` 说话。
+
+    还有一条，是真机账目逼出来的（2026-11-11）：手里这份表**答不出被问到的那条 `ep`**、
+    而它又不是这一拍刚拿的，就立刻重取一次。按 TTL 干等 30 s 的代价是这条流的点数在待归属
+    缓冲里挤满 `capture_pending_per_endpoint` 的预算，整批整批进 `pending_dropped`。触发器
+    只由 `pending_keys` 递进来——那是"攒着点又还不知道地址"的那几条流，别的流问都不问；
+    每网关每拍至多敲一次，`retry_floor_s` 就是那"一拍"的下限。
     """
 
     def __init__(self, db: Database, transport, settings: Settings) -> None:
@@ -233,14 +239,15 @@ class BridgeEndpointResolver:
         self.transport = transport
         self.settings = settings
         self.ttl_s = settings.capture_endpoint_ttl_s
+        self.retry_floor_s = settings.capture_flush_interval_s
         self._tables: dict[int, tuple[dict[str, str], float]] = {}
         self.last_error: str | None = None
         self.fetches = 0
         self.failures = 0
 
-    def _table(self, gateway_id: int) -> dict[str, str]:
+    def _table(self, gateway_id: int, force: bool = False) -> dict[str, str]:
         cached = self._tables.get(gateway_id)
-        if cached is not None and monotonic() - cached[1] < self.ttl_s:
+        if cached is not None and not force and monotonic() - cached[1] < self.ttl_s:
             return cached[0]
         try:
             with self.db.scope() as session:
@@ -270,7 +277,17 @@ class BridgeEndpointResolver:
 
     def addrs_for(self, gateway_id: int, eps: tuple[str, ...]) -> dict[str, str]:
         table = self._table(gateway_id)
+        if any(ep not in table for ep in eps) and self._is_stale(gateway_id):
+            table = self._table(gateway_id, force=True)
         return {ep: table[ep] for ep in eps if ep in table}
+
+    def _is_stale(self, gateway_id: int) -> bool:
+        """这份表是不是**上一拍之前**拿的：同一拍里刚答过的那份不算旧，再敲一遍是纯无谓。
+
+        `_table()` 两条出口都会把时间戳落进 `_tables`，所以问到这一步的网关一定有表——
+        没有表的那只手已经在 `_table()` 里把桥敲过了。
+        """
+        return monotonic() - self._tables[gateway_id][1] >= self.retry_floor_s
 
 
 class CapturePipeline:
@@ -490,7 +507,12 @@ class CapturePipeline:
 
     def _refresh_endpoints(self) -> None:
         """按端点明细发布成**新**元组。规则与 `_refresh_queues()` 一字不差：
-        `/api/health` 在另一个线程里迭代它，而这边随时可能新增或拔掉一条端点。"""
+        `/api/health` 在另一个线程里迭代它，而这边随时可能新增或拔掉一条端点。
+
+        最后三格回答"这条流为什么没进摘要"。归属要两件同时成立——桥说得出这条 `ep` 的地址、
+        节点表里有那个地址的行——而全局的 `unattributed` / `attributed_late` / `pending_dropped`
+        只说"丢了多少"，不说"卡在哪一件"。少了这三格，一次真机跑只能把成因写成推测。
+        """
         self._endpoint_stats = tuple(
             {
                 "endpoint": endpoint.ep,
@@ -501,6 +523,18 @@ class CapturePipeline:
                 "crc_errors": endpoint.stream.crc_errors,
                 "resync_bytes": endpoint.stream.resync_bytes,
                 "last_frame_mono": endpoint.last_frame_mono,
+                #: `None` = 桥的端点表还没说出这条 `ep` 归谁（缓存未命中，最坏一整个 TTL）。
+                "transport_addr": endpoint.transport_addr,
+                #: 那个地址在不在节点表里；地址还没认领下来时是 `None`（问都没法问）。
+                #: 于是 `(None, None)` = 卡在桥，`("/dev/x", False)` = 卡在 `ingest`，
+                #: `("/dev/x", True)` 而仍有点攒着 = 只是这一拍还没轮到。
+                "addr_in_node_table": (
+                    None
+                    if endpoint.transport_addr is None
+                    else self._node_for(endpoint) is not None
+                ),
+                #: 这条流此刻攒着多少个点：全局 `pending_points` 说不清是哪一条卡住。
+                "pending": endpoint.held,
             }
             for endpoint in sorted(
                 self._endpoints.values(), key=lambda e: (e.gateway_id, e.ep)
@@ -1165,6 +1199,9 @@ class CapturePipeline:
         keys = self.pending_keys()
         self.apply_addrs(await loop.run_in_executor(None, self.resolve_addrs, keys))
         attributed = self.attribute_pending()
+        # 端点明细在这里再发一次：`_drain` 那次是在归属**之前**发的，页面于是永远看不到
+        # "这一轮到底认领上了没有"——而排查时问的正是这一句。
+        self._refresh_endpoints()
         job = self.prepare()
         self.settle(await loop.run_in_executor(None, self.write, job))
         return {
@@ -1189,6 +1226,7 @@ class CapturePipeline:
         self.apply_refs(refs, ref_error)
         self.apply_addrs(self.resolve_addrs(self.pending_keys()))
         attributed = self.attribute_pending()
+        self._refresh_endpoints()  # 同 `flush_cycle()`：明细要跟上这一轮的归属决策
         job = self.prepare()
         self.write(job)
         self.settle(job)

@@ -27,6 +27,7 @@ import * as grid from "./grid.js";
 import { createLive } from "./live.js";
 import * as registry from "./registry.js";
 import { createStore } from "./store.js";
+import { statusPart as workspaceStatus, workspaceEntries } from "./workspaces.js";
 
 /** 一行格子的高度（CSS 像素）。栅格的纵向尺寸只有这一个真相，`styles.css` 不再另设一份。 */
 const CELL_H = 84;
@@ -391,6 +392,50 @@ export function mount(el, rtOverride) {
 
   // --- 各段渲染 ---------------------------------------------------------------
 
+  /**
+   * 顶栏的两个工作区入口。
+   *
+   * 三条渲染分支都是"把事实说出口"，不是三种样式：当前这一边不生成链接（点了只会原地刷新，
+   * 却长得像能切走）；控制台那边只有健康答复"挂了"才生成链接；问不到或问到"没挂"，就把那句
+   * 理由摆在入口旁边——灰掉一个按钮让人猜是这个仓库反复登记过的缺陷（R28 那一类）。
+   */
+  function workspaceSwitcher() {
+    const pathname = globalThis.location ? globalThis.location.pathname : "";
+    const entries = workspaceEntries({ pathname, health: context.state.health });
+    return h(
+      "nav",
+      { class: "workspaces", "data-workspaces": "1", "aria-label": "工作区" },
+      entries.map((entry) => {
+        const label = h("span", { class: "ws-name" }, entry.name);
+        const note = entry.current || entry.state === "ready" ? null : h("small", { class: "ws-note" }, entry.note);
+        const body = note ? [label, note] : label;
+        if (entry.href) {
+          return h(
+            "a",
+            {
+              class: ["ws-entry", `ws-entry--${entry.current ? "current" : "link"}`],
+              href: entry.href,
+              title: entry.note,
+              "data-workspace-id": entry.id,
+              "data-workspace-state": entry.current ? "current" : entry.state,
+            },
+            body
+          );
+        }
+        return h(
+          "span",
+          {
+            class: ["ws-entry", `ws-entry--${entry.current ? "current" : "off"}`],
+            title: entry.note,
+            "data-workspace-id": entry.id,
+            "data-workspace-state": entry.current ? "current" : entry.state,
+          },
+          body
+        );
+      })
+    );
+  }
+
   function toolbar() {
     const ctx = context.state;
     const option = (value, label, selected) =>
@@ -497,9 +542,15 @@ export function mount(el, rtOverride) {
                 ])
               : h("div", { class: "lib-planned" }, [
                   h("strong", entry.name),
-                  h("span", { class: "lib-size" }, `计划 ${entry.stage || "未定"}`),
+                  h("span", { class: "lib-size" }, entry.stage ? `计划 ${entry.stage}` : "没有排期"),
+                  // 归哪一边要说出来：这一页找不到烧录/功率计/计圈，是"在另一边"，
+                  // 不是"排期没到"——两种话混成一句"不上线"，运营者就会等一个不会来的版本。
+                  h("span", { class: ["lib-workspace", entry.workspace === "site" ? null : "lib-workspace--other"] },
+                    registry.workspaceWord(entry.workspace)),
                 ]),
-            h("p", { class: "lib-summary" }, entry.kind === "live" ? entry.summary : entry.reason),
+            // 未上线那一条下面只写摘要：`reason` 已经在下一行以"不上线的原因："整份说过了，
+            // 同一段字在两处铺满这列，运营者读到的还是同一句话，而这列的高度决定整页的高度。
+            h("p", { class: "lib-summary" }, entry.summary),
             entry.kind === "planned" ? h("p", { class: "lib-reason" }, `不上线的原因：${entry.reason}`) : null,
             !entry.available && entry.kind === "live" ? h("p", { class: "lib-reason" }, entry.reason) : null,
           ])
@@ -651,7 +702,12 @@ export function mount(el, rtOverride) {
           onClick: () => actions.remove(widget.instance_id),
         }, "✕"),
       ]),
-      h("div", { class: "widget-body" }, [h(kit.resolve(widget), { widget })]),
+      // `key` 必须带租代号（`store.state.generation`）：重开同一份布局时 instance_id 不变，
+      // 没有它 Vue 会复用旧组件实例，而组件在 setup 里捕获的那份 lease 已经被 releaseAll 收走
+      // ——格子看着还在，定时器却再也不响，控制格还会因为 onRelease 钩子跑过而永久拒绝下发。
+      h("div", { class: "widget-body" }, [
+        h(kit.resolve(widget), { key: `${widget.instance_id}:${store.state.generation}`, widget }),
+      ]),
       h("span", {
         class: "handle",
         title: "拉右下角改尺寸",
@@ -896,11 +952,23 @@ export function mount(el, rtOverride) {
       dirty: dirtyCount() > 0,
       data: { value: live.dataLabel(), tone: live.dataTone() },
     });
+    // 工作区排在最前：同一台机器上开两个页签时，"这一页是哪一边"比"看的是哪块板"更先需要。
+    // 它不进 `context.statusBar()`：那里说的是数据上下文（场地/位置/接入机/板），而工作区是
+    // **这个页面本身**的事实，来源是 URL 与健康检查那一节，不是被选中的层级。
+    const parts = [workspaceStatus({ pathname: globalThis.location.pathname })].concat(bar.parts);
     const calls = api.audit();
     const blocked = store.readOnlyReason();
-    return h("footer", { class: "status", "data-statusbar": "1", title: bar.text }, [
-      bar.parts.map((part) =>
-        h("span", { class: ["status-part", `tone--${part.tone}`], "data-label": part.label }, [
+    return h("footer", {
+      class: "status",
+      "data-statusbar": "1",
+      title: parts.map((part) => `${part.label} ${part.value}`).join(" · "),
+    }, [
+      parts.map((part) =>
+        h("span", {
+          class: ["status-part", `tone--${part.tone}`],
+          "data-label": part.label,
+          ...(part.label === "工作区" ? { "data-workspace": "1" } : {}),
+        }, [
           h("span", { class: "status-label" }, part.label),
           h("span", { class: "status-value" }, part.value),
         ])
@@ -1013,6 +1081,7 @@ export function mount(el, rtOverride) {
         return h("div", { class: "shell" }, [
           h("header", { class: "masthead" }, [
             h("h1", "RF Track 工作台"),
+            workspaceSwitcher(),
             h("span", { class: "muted" }, "S6：栅格 + 组件库 + 属性面板 + 层级选择 · 数据走 /ws/live 与 REST，回放帧带 MOCK 角标"),
             h("span", { class: "spacer" }),
             context.state.instanceRole === "aggregator"

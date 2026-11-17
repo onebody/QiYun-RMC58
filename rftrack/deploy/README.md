@@ -35,10 +35,35 @@ curl -s http://127.0.0.1:9000/api/health | head
 ## 形态二：Docker
 
 ```bash
-docker compose -f rftrack/deploy/docker-compose.yml up -d --build
+cd web && npm run build && cd -          # 控制台产物不在 git 里，先在本机出包
+RFTRACK_HOST_PORT=19000 \
+  docker compose -f rftrack/deploy/docker-compose.yml up -d --build
+curl -s http://127.0.0.1:19000/api/health | tr ',' '\n' | grep -E '"(console|workbench)"'
 ```
 
 数据在 named volume `rftrack-data`；容器随删随起数据不动。
+
+一套实例发**两个工作区**，都从同一个 origin 出来，根上 `/` 是一张入口页：
+
+| 入口 | 谁发的 | 产物从哪来 |
+| --- | --- | --- |
+| `/app/` 单机控制台 | `mount_console`，目录默认 `web/dist` | **宿主机绑卷只读挂进来**（compose 里那条 `- ../../web/dist:/app/web/dist:ro`） |
+| `/workbench/` 站点监测 | `mount_workbench` | `COPY rftrack/frontend` 进镜像（Vue3 CDN 无构建，跟着代码走） |
+
+分工的理由：`web/dist` 是 node 构建产物，既不进 git，也不值得为它在镜像里塞一套 node
+工具链（主形态的 Pi 更跑不动）；工作台那一边压根不需要构建，所以它跟代码同生共死。
+
+**更新一版** = `cd web && npm run build`，然后：
+
+- 只改了控制台 → `docker compose -f rftrack/deploy/docker-compose.yml restart`；
+- 改了后端或工作台 → 同上再加 `--build`。
+
+`restart` 那一步不能省：挂没挂上 `/app` 是**启动那一刻**看的，运行中往目录里补文件不会让
+`/api/health` 的 `console` 那一节自己活过来。忘了 restart 的现象是"页面还是旧的"，
+而 `/api/health` 会一直说 `mounted: true`——它只保证目录在，不保证内容新。
+
+`web/dist` 不存在也能起：compose 的绑卷会留一个空目录，入口页与 `console.reason` 都写成
+"配了目录但里面没有 index.html（前端产物还没构建进来）"，不算故障、不进 `problems`。
 
 ## 数据搬家（归档）
 
@@ -64,3 +89,21 @@ curl -F "file=@site-home.zip" http://<host>:9000/api/import/site-package
 - systemd 单元的 `ReadWritePaths=/opt/rftrack/data` 必须真的覆盖 `RFTRACK_DB_PATH`
   所在目录，否则 ProtectSystem=strict 下写库直接 EACCES，现象是"迁移失败，拒绝启动"。
 - Pi 上插着板子的 USB 串口属于 `dialout` 组：`sudo usermod -aG dialout rftrack`。
+- **同源之后，控制台那两条"伴生服务"探测会打到后端的同类路由上**。`web/` 按同源约定探
+  `serve.mjs` 的两条接口，而这两条路在 `/app/` 下由 rftrack 后端接走：
+  - `GET /api/endpoints`（`web/src/model/devices.ts:92`，`main.ts:939` 那份 `DeviceManager(2000)`
+    每 2s 一次）撞上后端的桥接路由（`app/routers/bridge.py:43`，`gateway` 必填）→ **422**；
+  - `GET /api/mode` 后端没这条路由 → **404**。
+  两边都只认"非 2xx 就当没有伴生服务"（`if (!r.ok) return`），所以行为是设计内的回落，不是故障：
+  控制台退回 Web Serial 直连 / 模拟器，不编造设备卡。两处要说清的代价——
+  ①**只要有一个控制台标签页开着**，后端日志每 2s 一条 422；看到这批 422 不要去找"哪个网关没配"。
+  ②`/api/mode` 那条 404 让"桥接板子"那一整段（含端点下拉，`main.ts:641-644` 在 `r.ok` 之后才装配）
+  在这套同源部署里**根本不出现**——要按网关视角看桥接的板子，走 `/workbench/` 那一边，
+  或者照主形态让 `serve.mjs` 自己发 `/app/`。
+- **容器里拨宿主机上的 `serve.mjs`，只能用 `host.docker.internal`，不能用宿主机的局域网 IP**。
+  本机实测：网关 `base_url` 写 `http://192.168.8.156:8011` 时 `POST /api/gateways/{id}/probe`
+  回 `ok:false reason:"timeout"`，换成 `http://host.docker.internal:8011` 当场
+  `ok:true dial_state:"online"`（`172.17.0.1:8011` 则是 `refused`）。现象是"超时"而不是"拒绝"，
+  很容易被读成"桥没起来"——桥其实活着，只是容器到不了那个地址。
+  Linux 上这个域名不存在，需要显式补 `extra_hosts: ["host.docker.internal:host-gateway"]`；
+  macOS/Windows 的 Docker Desktop 自带。

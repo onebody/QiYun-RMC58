@@ -112,6 +112,39 @@ test("写请求带 JSON 体，204 回 null 而不是解析空响应", async () =
   assert.equal(captured.init.body, JSON.stringify({ version: 2 }));
 });
 
+test("nodeCommand：URL/体形状对得上后端，板子 ERR 是 200 带 ok:false 而不是抛错", async () => {
+  let captured = null;
+  const api = createApi({
+    base: "/rftrack",
+    fetchImpl: fakeFetch(async (url, init) => {
+      captured = { url, init };
+      // 板子拒绝：后端 services/node_control.py 的 `_result` 回 200 + ok:false + 原词。
+      return response({ status: 200, body: { node_id: 30, ok: false, reply: "ERR gain_range", command: "GAIN 999" } });
+    }),
+  });
+  const out = await api.nodeCommand(30, "GAIN 999");
+  assert.equal(captured.url, "/rftrack/api/nodes/30/command");
+  assert.equal(captured.init.method, "POST");
+  assert.equal(captured.init.headers["Content-Type"], "application/json");
+  assert.equal(captured.init.body, JSON.stringify({ command: "GAIN 999" }), "命令原样进体，调用层不裁剪不改大小写");
+  // 关键契约：ERR 不抛——页面要把板子的原话画出来，当成"请求失败"就丢了原词。
+  assert.equal(out.ok, false);
+  assert.equal(out.reply, "ERR gain_range");
+});
+
+test("nodeCommand：后端拒绝（409 control_disabled）才抛 ApiError，reason 可分支", async () => {
+  const api = createApi({
+    base: "",
+    fetchImpl: fakeFetch(async () => response({ status: 409, body: { detail: { reason: "control_disabled", detail: "命令通路没开" } } })),
+  });
+  await assert.rejects(() => api.nodeCommand(30, "SCAN START"), (err) => {
+    assert.ok(err instanceof ApiError);
+    assert.equal(err.status, 409);
+    assert.equal(err.reason, "control_disabled");
+    return true;
+  });
+});
+
 test("建库三步与探测：路径与方法要和后端 routers/{sites,relays,gateways}.py 对得上", async () => {
   const seen = [];
   const api = createApi({

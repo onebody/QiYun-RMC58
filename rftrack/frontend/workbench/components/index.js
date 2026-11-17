@@ -17,6 +17,9 @@ import { create as channelMatrix } from "./channel-matrix.js";
 import { create as channelActivityHeatmap } from "./channel-activity-heatmap.js";
 import { create as combinedSpectrum } from "./combined-spectrum.js";
 import { create as nodeStatus } from "./node-status.js";
+import { create as nodeControls } from "./node-controls.js";
+import { create as nodeConsole } from "./node-console.js";
+import { create as nodeRawIq } from "./node-rawiq.js";
 import { create as rssiTrend } from "./rssi-trend.js";
 import { create as signalEvents } from "./signal-events.js";
 import { create as siteTree } from "./site-tree.js";
@@ -33,6 +36,9 @@ export const IMPLEMENTED = {
   "channel-activity-heatmap": channelActivityHeatmap,
   "target-inspector": targetInspector,
   "node-status": nodeStatus,
+  "node-controls": nodeControls,
+  "node-console": nodeConsole,
+  "node-rawiq": nodeRawIq,
   "site-tree": siteTree,
 };
 

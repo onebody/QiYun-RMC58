@@ -409,7 +409,6 @@ static bool parse_channels(char *args, const profile_t *p, scan_config_t *c) {
 }
 
 static void handle(char *line, link_sink_t sink) {
-    printf("HANDLE sink=%d proto=%d line='%s'\n", (int)sink, (int)proto, line);
     reply_sink = sink;
     if (proto == PROTO_RH && !rh_allowed(line)) {
         reply_text("ERR rh_mode\n");
@@ -781,7 +780,22 @@ static void handle(char *line, link_sink_t sink) {
         } else if (!strncmp(arg, "PASS ", 5)) {
             if (!net_value(arg + 5, net_ram.pass, sizeof(net_ram.pass))) err = "net_pass";
         } else if (!strncmp(arg, "ID ", 3)) {
-            if (!net_value(arg + 3, net_ram.id, sizeof(net_ram.id))) err = "net_id";
+            /* The id is spliced into the dial's request line as ?id=<value>, so
+             * only characters that survive an unencoded query are accepted -
+             * anything else would make the relay silently undialable. Empty
+             * clears it, which puts the MAC-derived name back in charge. */
+            char id[sizeof(net_ram.id)];
+            if (!net_value(arg + 3, id, sizeof(id))) err = "net_id";
+            else if (!id[0]) {
+                net_ram.id[0] = 0;
+            } else {
+                bool ok = true;
+                for (const char *p = id; *p && ok; p++)
+                    ok = (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+                         (*p >= '0' && *p <= '9') || *p == '_' || *p == '-' || *p == '.' || *p == ':';
+                if (ok) memcpy(net_ram.id, id, sizeof(net_ram.id));
+                else err = "net_id";
+            }
         } else if (!strncmp(arg, "URL ", 4)) {
             char url[sizeof(net_ram.url)];
             if (!net_value(arg + 4, url, sizeof(url))) err = "net_url";
@@ -846,12 +860,12 @@ static void handle(char *line, link_sink_t sink) {
             else reply_text("OK\n");
             return;
         } else if (!strcmp(arg, "SCAN")) {
-            /* List nearby APs as a JSON array, best-RSSI first. Requires Wi-Fi
-             * to be up — we bring it up in STA mode if necessary so the scan
-             * runs; the operator can NET OFF afterwards if they only wanted the
-             * list. The reply is always JSON (or ERR) so the host can parse it
-             * the same way it parses NET STATUS. */
-            char aps[512];
+            /* List nearby APs as a JSON array, best-RSSI first. Scans on the
+             * running STA whenever the driver is up (softap.c decides), so a
+             * configured relay keeps its link instead of dropping the operator's
+             * own page to open an AP. The reply is always JSON (or ERR) so the
+             * host can parse it the same way it parses NET STATUS. */
+            char aps[1024];
             if (softap_cmd_scan(aps, sizeof(aps)))
                 reply_printf("NET %s\n", aps);
             else
@@ -874,13 +888,15 @@ static void handle(char *line, link_sink_t sink) {
             return;
         } else if (!strcmp(arg, "STATUS")) {
             /* The pass is deliberately absent: this reply goes to a log and to
-             * whoever is watching the port. */
+             * whoever is watching the port. "ap" is the panel's SoftAP chip:
+             * without it the dialog could only guess whether the AP is open. */
             char up[256], head[180];
             ws_link_status(up, sizeof(up));
             relay_pipe_status(head, sizeof(head));
-            reply_add("NET {\"on\":%s,\"ssid\":\"%s\",\"url\":\"%s\",\"id\":\"%s\",%s,%s,"
+            reply_add("NET {\"on\":%s,\"ssid\":\"%s\",\"url\":\"%s\",\"id\":\"%s\",\"ap\":%s,%s,%s,"
                       "\"queue_permille\":%u,\"out_drops\":%" PRIu32 "}\n",
-                      net_ram.on ? "true" : "false", net_ram.ssid, net_ram.url, net_ram.id, up, head,
+                      net_ram.on ? "true" : "false", net_ram.ssid, net_ram.url, net_ram.id,
+                      softap_running() ? "true" : "false", up, head,
                       link_fill_permille_to(LINK_WS), link_drops());
             reply_send();
             return;
@@ -943,10 +959,8 @@ static void commands_task(void *arg) {
      * smaller buffer would lose the tail of a long command (USB and the UART
      * keep it in their drivers, the ring does not). */
     uint8_t buf[128];
-    printf("TASK start: sink=%d\n", (int)sink);
     for (;;) {
         int n = link_read_from(sink, buf, sizeof(buf), p->probe ? PROBE_QUIET_MS : 20);
-        if (n > 0) printf("TASK sink=%d read n=%d first=%c\n", (int)sink, n, buf[0] < 0x20 ? '.' : buf[0]);
         int64_t now = esp_timer_get_time();
         xSemaphoreTake(cmd_lock, portMAX_DELAY);
 #if RX_WIFI_RELAY
@@ -1001,7 +1015,6 @@ static void commands_task(void *arg) {
             xSemaphoreGive(cmd_lock);
             continue;
         }
-        if (n > 0) printf("  BYTELOOP sink=%d n=%d proto=%d\n", (int)sink, n, (int)proto);
         for (int i = 0; i < n; i++) {
             uint8_t b = buf[i];
             if (proto == PROTO_MONITOR) {

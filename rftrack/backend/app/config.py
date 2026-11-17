@@ -129,11 +129,16 @@ class Settings:
     #: 每个端点在"还不知道这字节属于哪个节点"期间最多攒多少个点。有界、丢最旧并计数；
     #: 挤的时候按**整帧**挤（缓冲的单位是一帧，不是半帧），所以一帧多于这个数时一帧都攒不下。
     #: 攒着是为了桥认领之后不把开头几秒直接扔掉，而不是为了给断网卡一个无限缓冲。
+    #: 认领不了的最坏时长已经不是这个键说了算：桥答不出某条 `ep` 时，下一拍就会再问一次
+    #: （`services/capture.py` 的 `BridgeEndpointResolver`），所以盲区是一拍而不是一个 TTL。
     capture_pending_per_endpoint: int = 512
     #: 一轮最多落多少条事件。丢了算 `events_dropped`，不静默。
     capture_event_limit: int = 64
     #: `ep` → `transport_addr` 那份桥端点表缓存的寿命（秒）。桥重启或换了 symlink 之后，
     #: 最坏要过这么久才反映到归属上；再短就是在无谓地反复敲桥。
+    #: 但"表里没有这条 `ep`"不等满 TTL：那一拍它正攒着点又没有地址，就再敲一次桥，上限是
+    #: 每网关每拍一次（下限是上面那个节拍）。2026-11-11 的真机账目等的是这条：按旧口径，
+    #: 30 s 的盲区足够把点数挤满上面的预算，`attributed_late` 每次正好加满一整个预算。
     capture_endpoint_ttl_s: float = 30.0
     #: 原始 IQ 默认不入库——Pi 只有这一张卡。
     rawiq_persist: bool = False
@@ -192,6 +197,22 @@ class Settings:
     target_engine_enabled: bool = True
     #: 引擎节拍（秒）。与告警引擎同一个下限与同一条理由：再快就是在空库上空转敲 SQLite。
     target_interval_s: float = 2.0
+    # --- 节点级命令下发（`services/node_control.py`）---------------------------
+    #: 命令通路的总开关。默认开：站点工作台的控制格子交付的就是"点一下板子就动"。
+    #: 关掉是合法部署形态（只要看不要动，回滚位与 `plugins_enabled` 同构），健康检查照实说
+    #: 没启用、不算故障；那时 `POST /api/nodes/{id}/command` 一律 409 `control_disabled`。
+    control_enabled: bool = True
+    #: 一条命令等板子回答的预算（秒）。与 `probe_timeout_s` 同一个量级但不同用途：
+    #: 那条问的是"桥在不在"，这条问的是"板子答不答"。RAWIQ 一整个快照也在这个预算里，
+    #: 所以它不能按"一行文本"来定——3 s 是 ②a 档位下抓 2500 点的量级判断，待真机压测。
+    control_timeout_s: float = 3.0
+    #: 握着端点但没人再发命令，这么多秒后交还（秒）。**这是 R21 的另一半**：控制 API
+    #: 自己开的上游必须自己还回去，否则 ②a 的 RotorHazard 会因为"半小时前有人点过一次
+    #: GAIN"而一直停着。30 s 是"操作员还在调参"与"人已经走了"之间的折中，不是实测值。
+    control_idle_release_s: float = 30.0
+    #: 闲了交还的巡检节拍（秒）。它比 `control_idle_release_s` 大时，交还的时机就由巡检
+    #: 而不是由空闲时长决定（板子会多被占住一拍）；5 s 与 `dial_poll_interval_s` 同一个体感档位。
+    control_sweep_interval_s: float = 5.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "db_path", Path(self.db_path))
@@ -251,6 +272,17 @@ class Settings:
             raise ValueError("alert_interval_s 至少 0.5 秒：再快就是在空库上空转敲 SQLite")
         if self.target_interval_s < 0.5:
             raise ValueError("target_interval_s 至少 0.5 秒：再快就是在空库上空转敲 SQLite")
+        # 命令通路这三条配成 0 都不是"更激进"，而是"功能看起来在、实际每条都失败"：
+        # 超时 0 = 每条命令都 504，空闲 0 = 每条命令都重开一次上游（等于每按一次复位一次板），
+        # 巡检 0 = 把事件循环钉在 CPU 上。
+        if self.control_timeout_s <= 0:
+            raise ValueError("control_timeout_s 必须大于 0 秒：0 等于每条命令都超时")
+        if self.control_idle_release_s <= 0:
+            raise ValueError(
+                "control_idle_release_s 必须大于 0 秒：0 等于每条命令都重开上游，而开 USB tty 会复位板子"
+            )
+        if self.control_sweep_interval_s <= 0:
+            raise ValueError("control_sweep_interval_s 必须大于 0 秒：0 会让巡检变成紧循环")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "Settings":
@@ -322,6 +354,12 @@ class Settings:
                 source.get("RFTRACK_TARGET_ENGINE_ENABLED", "1"), "RFTRACK_TARGET_ENGINE_ENABLED"
             ),
             target_interval_s=float(source.get("RFTRACK_TARGET_INTERVAL_S", "2")),
+            control_enabled=_bool(
+                source.get("RFTRACK_CONTROL_ENABLED", "1"), "RFTRACK_CONTROL_ENABLED"
+            ),
+            control_timeout_s=float(source.get("RFTRACK_CONTROL_TIMEOUT_S", "3")),
+            control_idle_release_s=float(source.get("RFTRACK_CONTROL_IDLE_RELEASE_S", "30")),
+            control_sweep_interval_s=float(source.get("RFTRACK_CONTROL_SWEEP_INTERVAL_S", "5")),
         )
 
     @property

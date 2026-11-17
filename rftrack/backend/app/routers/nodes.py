@@ -1,20 +1,21 @@
-"""节点读数。S2 只有读：节点行由 serve.mjs 的枚举落地（S3 ingest）后才会有写入路径。
+"""节点读数与节点级命令。节点行由 serve.mjs 的枚举落地（S3 ingest），身份键是
+`(gateway_id, transport_addr)`，显示名不参与去重；场地/位置一律经 gateway → relay → site
+推导，一条 SQL 取回，避免 N+1 也避免在 node 上双写。
 
-身份键是 `(gateway_id, transport_addr)`，显示名不参与去重；场地/位置一律
-经 gateway → relay → site 推导，一条 SQL 取回，避免 N+1 也避免在 node 上双写。
+`POST /{id}/command` 是另一回事：它不改库，改的是板子当下的状态（`services/node_control.py`）。
 """
 
 from __future__ import annotations
 
 import json
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..deps import get_session, require_writable_session
 from ..models import Gateway, Node, Relay
-from ..schemas import NodeDeclaration, NodeOut
+from ..schemas import NodeCommand, NodeDeclaration, NodeOut
 from ..services.capabilities import render_capabilities, stops_rotorhazard
 from ..services.hierarchy import flush_or_conflict, get_or_404, not_found
 
@@ -102,3 +103,22 @@ def declare_node(
     flush_or_conflict(session, "node_declaration")
     row = session.execute(_query().where(Node.node_id == node_id)).first()
     return as_out(*row)
+
+
+@router.post("/{node_id}/command")
+async def command_node(
+    node_id: int,
+    body: NodeCommand,
+    request: Request,
+    session: Session = Depends(require_writable_session),
+) -> dict:
+    """把一行命令发给这块板，等它自己回答（`services/node_control.py`）。
+
+    这是站点工作台里那套"单模块接入点控制"的写侧，C-8 留到 sticky 单写者之后的那一轮。
+    与 `PUT` 的区别是**它不落库**：改的是板子当下的状态，平台这边只留一次计数与理由，
+    所以汇聚实例照样 405（`require_writable_session` 那道闸），而板子的 `ERR …` 是 200
+    带 `ok=false`——那是板子说的话，不是传输故障。
+
+    `session` 在这里只当角色闸用：命令通路自己开库会话读节点行，不需要请求这一条。
+    """
+    return await request.app.state.control.send(node_id, body.command)

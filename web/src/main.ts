@@ -15,6 +15,7 @@ import { MockTransport, type SimTarget } from "./mock/mockDevice";
 import { applyLang, getLang, setLang, t, type Lang } from "./i18n";
 import { el, invalidateTheme } from "./util/canvas";
 import { ChannelGrid } from "./views/channelGrid";
+import { Workspace } from "./views/workspace";
 import { Panorama } from "./views/panorama";
 import { Zoom } from "./views/zoom";
 import { History } from "./views/history";
@@ -119,6 +120,10 @@ const modeItems = {
   power: el("button", { class: "menu-item", role: "menuitemradio" }, "Power meter mode"),
 };
 const timerNote = el("div", { class: "menu-note" });
+const layoutFree = el("button", { class: "menu-item", role: "menuitemradio" }, "Free layout");
+const layoutStack = el("button", { class: "menu-item", role: "menuitemradio" }, "Stacked layout");
+const layoutReset = el("button", { class: "menu-item", role: "menuitem" }, "Reset layout");
+const layoutNote = el("div", { class: "menu-note", hidden: "" });
 const gpioItem = el("button", { class: "menu-item", role: "menuitem", title: "Pins the device sets at startup" }, "GPIO Configure");
 const rhDataItem = el("button", { class: "menu-item", role: "menuitem" }, "RotorHazard race data…");
 const rhDataNote = el("div", { class: "menu-note", hidden: "" });
@@ -137,6 +142,12 @@ const menu = el(
   modeItems.timer,
   modeItems.power,
   timerNote,
+  el("div", { class: "menu-sep" }),
+  el("div", { class: "menu-label" }, "Layout"),
+  layoutFree,
+  layoutStack,
+  layoutNote,
+  layoutReset,
   el("div", { class: "menu-sep" }),
   gpioItem,
   rhDataItem,
@@ -166,17 +177,46 @@ function addView(page: Page, view: View, minMs = 0) {
   views.push({ view, page, minMs, last: 0, drawn: -1 });
   return view.el;
 }
-const monitorMain = el(
-  "main",
-  {},
-  addView("monitor", new ChannelGrid(app), 100),
-  addView("monitor", new Panorama(app), 33),
-  addView("monitor", new Zoom(app), 33),
-  addView("monitor", new History(app), 50),
-  addView("monitor", new Telemetry(app), 200),
-  addView("monitor", new Controls(app), 100),
-  addView("monitor", new RawIqView(app), 100),
-);
+const channelsView = new ChannelGrid(app);
+const panoramaView = new Panorama(app);
+const zoomView = new Zoom(app);
+const historyView = new History(app);
+const telemetryView = new Telemetry(app);
+const controlsView = new Controls(app);
+const rawiqView = new RawIqView(app);
+addView("monitor", channelsView, 100);
+addView("monitor", panoramaView, 33);
+addView("monitor", zoomView, 33);
+addView("monitor", historyView, 50);
+addView("monitor", telemetryView, 200);
+addView("monitor", controlsView, 100);
+addView("monitor", rawiqView, 100);
+// Wide screens start in the free layout; below 900 px the workspace stacks
+// like the old page, keeping the user's free/stack choice for when it widens.
+const workspace = new Workspace({
+  storageKey: "widscan58.layout.monitor",
+  defaultMode: "free",
+  specs: [
+    { id: "channels", view: channelsView.el, minW: 4, minH: 6 },
+    { id: "panorama", view: panoramaView.el, minW: 6, minH: 8 },
+    { id: "zoom", view: zoomView.el, minW: 3, minH: 5 },
+    { id: "history", view: historyView.el, minW: 3, minH: 5 },
+    { id: "telemetry", view: telemetryView.el, minW: 3, minH: 5 },
+    { id: "controls", view: controlsView.el, minW: 3, minH: 6 },
+    { id: "rawiq", view: rawiqView.el, minW: 4, minH: 8 },
+  ],
+  defaults: {
+    channels: { x: 0, y: 0, w: 12, h: 9 },
+    panorama: { x: 0, y: 9, w: 12, h: 15 },
+    zoom: { x: 0, y: 24, w: 6, h: 9 },
+    history: { x: 6, y: 24, w: 6, h: 9 },
+    telemetry: { x: 0, y: 33, w: 6, h: 10 },
+    controls: { x: 6, y: 33, w: 6, h: 12 },
+    rawiq: { x: 0, y: 45, w: 6, h: 13 },
+  },
+  onChange: () => store.touch(),
+});
+const monitorMain = workspace.el;
 const timerMain = el(
   "main",
   { class: "timer-page" },
@@ -202,6 +242,8 @@ function showPage() {
   monitorMain.style.display = mode === "monitor" ? "" : "none";
   timerMain.style.display = mode === "timer" ? "" : "none";
   powerMain.style.display = mode === "power" ? "" : "none";
+  // A display:none workspace has no size; lay it out again on the way back.
+  if (mode === "monitor") workspace.refresh();
   for (const [m, item] of Object.entries(modeItems)) item.setAttribute("aria-checked", String(m === mode));
   const replay = app.readOnly && !!app.device;
   modeItems.timer.disabled = legacyFirmware || replay;
@@ -221,14 +263,19 @@ function startMode(device: Device): Promise<void> {
   const run = async () => {
     if (!device.connected) return; // the link went away before we asked
     let proto: string | null = null;
-    try {
-      proto = await device.text("PROTOCOL?", 1500);
-    } catch (e) {
-      store.addLog("info", `no protocol switch (${(e as Error).message}); monitor mode only`);
+    // A polled RH link swallows text lines (the firmware only parses them
+    // between RotorHazard transactions), so PROTOCOL? would always time out
+    // here — and that timeout is not evidence of legacy firmware.
+    if (!device.rh) {
+      try {
+        proto = await device.text("PROTOCOL?", 1500);
+      } catch (e) {
+        store.addLog("info", `no protocol switch (${(e as Error).message}); monitor mode only`);
+      }
     }
     // A relay node or bridge can drop mid-handshake; do not keep talking to it.
     if (!device.connected) return;
-    legacyFirmware = proto === null;
+    legacyFirmware = !device.rh && proto === null;
     if (legacyFirmware && app.settings.uiMode === "timer") app.settings.uiMode = "monitor";
     showPage();
     if (app.settings.uiMode === "timer") {
@@ -278,6 +325,33 @@ function setMode(mode: "monitor" | "timer" | "power") {
 modeItems.monitor.onclick = () => setMode("monitor");
 modeItems.timer.onclick = () => setMode("timer");
 modeItems.power.onclick = () => setMode("power");
+
+/** The layout radio pair reflects the layout actually in use right now. */
+function syncLayoutMenu() {
+  const active = workspace.activeMode;
+  layoutFree.setAttribute("aria-checked", String(active === "free"));
+  layoutStack.setAttribute("aria-checked", String(active === "stack"));
+  layoutFree.disabled = !workspace.isWide;
+  const note = workspace.isWide ? "" : t("Free layout needs a window at least 900 px wide.");
+  layoutNote.textContent = note;
+  layoutNote.hidden = !note;
+}
+syncLayoutMenu();
+layoutFree.onclick = () => {
+  closeMenu();
+  workspace.setMode("free");
+  syncLayoutMenu();
+};
+layoutStack.onclick = () => {
+  closeMenu();
+  workspace.setMode("stack");
+  syncLayoutMenu();
+};
+layoutReset.onclick = () => {
+  closeMenu();
+  workspace.reset();
+  syncLayoutMenu();
+};
 const gpioDialog = new GpioDialog(app);
 document.body.append(gpioDialog.el);
 gpioItem.onclick = () => {
@@ -344,6 +418,8 @@ function setState(state: typeof connState, key: string, params?: Record<string, 
 function relabelChrome() {
   setState(connState, connKey, connParams);
   showPage(); // also updates the banner and firmware text
+  workspace.relabel();
+  syncLayoutMenu();
   syncRhDataNote();
   if (boardLinkApi) {
     renderEndpoints();
@@ -516,7 +592,7 @@ async function connect(transport: Transport, readOnly = false) {
   app.device = device;
   app.readOnly = readOnly;
   setState(transport instanceof MockTransport ? "sim" : "ok", transport.name);
-  (window as unknown as { widscan58: unknown }).widscan58 = { app, store }; // test/debug hook
+  (window as unknown as { widscan58: unknown }).widscan58 = { app, store, startMode }; // test/debug hook
   store.addLog("info", `connected via ${transport.name}`);
   if (readOnly) {
     legacyFirmware = false;
@@ -816,7 +892,7 @@ async function pickBridge(opts: { restoreRh?: boolean } = {}) {
   connectBtn.setAttribute("aria-expanded", "true");
 }
 
-function connectBridge(id?: string, opts: { restoreRh?: boolean } = {}) {
+async function connectBridge(id?: string, opts: { restoreRh?: boolean } = {}): Promise<void> {
   if (app.device) return;
   // The auto-pick never takes the UART board: selecting it means stopping
   // RotorHazard, which only an explicit choice should do.
@@ -838,9 +914,8 @@ function connectBridge(id?: string, opts: { restoreRh?: boolean } = {}) {
   bridgeTransport = new WebSocketTransport(url, info ? endpointName(info) : ep);
   // Remember this choice so the page can auto-reconnect on next load.
   localStorage.setItem("widscan58.lastBridge", url);
-  void connect(bridgeTransport).then(() => {
-    if (opts.restoreRh !== false && !ep.startsWith("uart:")) void restoreRhIfIdle();
-  });
+  await connect(bridgeTransport);
+  if (opts.restoreRh !== false && !ep.startsWith("uart:")) void restoreRhIfIdle();
 }
 
 /**
@@ -943,7 +1018,7 @@ async function connectDevice(d: ManagedDevice) {
   // Use the existing bridge connector — it builds the WS URL, creates the
   // transport, and connects the app. Endpoint id format matches serve.mjs
   // conventions: "serial:/dev/cu.xxx" or "node:widscan58-xxx" or "uart:/dev/xxx".
-  connectBridge(d.id);
+  await connectBridge(d.id);
   deviceList.close();
 }
 
@@ -952,13 +1027,37 @@ async function manageDevice(d: ManagedDevice) {
     store.addLog("info", "只有 WiFi relay 板子支持远程管理（配网/改名/模式）");
     return;
   }
-  // Ensure we're connected to this device first, then open the net dialog.
-  if (!app.device || bridgedEp !== d.id) {
-    await connectDevice(d);
-    await new Promise((r) => setTimeout(r, 300)); // let conn settle
+  // The panel's commands go to whatever the page is connected to, so leaving
+  // another board connected would configure that board instead.
+  deviceList.close();
+  if (!app.device?.connected || bridgedEp !== d.id) {
+    if (app.device) await disconnect().catch(() => {});
+    await connectBridge(d.id);
+    const deadline = Date.now() + 5000;
+    while (!app.device?.connected && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (!app.device?.connected) {
+      store.addLog("error", `无法连接到 ${d.label}，设备管理面板拿不到状态`);
+      return;
+    }
   }
   await netDialog.open({
-    send: (cmd) => app.send(cmd),
+    async send(cmd) {
+      const dev = app.device;
+      if (!dev?.connected) return null;
+      store.addLog("tx", cmd);
+      try {
+        const item = await dev.command(cmd);
+        return item.kind === "text" ? item.line : "frame";
+      } catch (e) {
+        const msg = (e as Error).message;
+        store.addLog("error", msg);
+        // "NET SSID x: ERR net_ssid" — the panel shows the firmware's own code.
+        const i = msg.indexOf(": ");
+        return i >= 0 && msg.slice(i + 2).startsWith("ERR") ? msg.slice(i + 2) : `ERR ${msg}`;
+      }
+    },
     connected: () => !!app.device?.connected,
   });
 }
@@ -1075,4 +1174,7 @@ function frame(now: number) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.addEventListener("resize", () => store.touch());
+window.addEventListener("resize", () => {
+  store.touch();
+  syncLayoutMenu(); // crossing 900 px enables/disables the free layout
+});

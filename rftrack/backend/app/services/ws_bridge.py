@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Mapping, Protocol
+from typing import Callable, Mapping, Protocol
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -174,6 +174,16 @@ class _Session:
     fanned: int = 0
     text_frames_ignored: int = 0
     dropped_pages: int = 0
+    #: 非页面的持有者数（控制 API 的 `acquire`）。它与 `readers` 一起决定这条端点还要不要握着：
+    #: 只看"有没有页面"会在站点工作台发命令时把上游关掉，而开 USB tty 会复位板子。
+    holders: int = 0
+    #: 页面写与 API 写共用的那把锁。桥那边只有一条字节流，两路交错写就是把两条命令撕成一条；
+    #: 它**不是**写权仲裁——`writer` 那一位仍然只管页面之间谁先发的命令。
+    write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    #: 字节旁路（控制 API 收答用）。与 observer 同一条纪律：同步、不 await、抛了只计数。
+    taps: dict[int, Callable[[bytes], None]] = field(default_factory=dict)
+    next_tap: int = 1
+    tap_failures: int = 0
 
     def add_reader(self, websocket: WebSocket) -> int:
         page = self.next_page
@@ -191,6 +201,9 @@ class _Session:
             "fanned": self.fanned,
             "text_frames_ignored": self.text_frames_ignored,
             "dropped_pages": self.dropped_pages,
+            "holders": self.holders,
+            "taps": len(self.taps),
+            "tap_failures": self.tap_failures,
         }
 
 
@@ -209,6 +222,11 @@ class BridgeHub:
     它对透传的唯一义务是"绝不挡路"：同步入队、不 await、不许让一块板的字节停止到达浏览器，
     所以这里连它自己抛的异常都吞下来只记一个数。观察者**不开第二条上游、也不握着端点**——
     那会把 ②a 的 RotorHazard 一直停着（R21）。
+
+    `acquire`/`release` 与 `add_tap` 是给**控制通道**（`services/node_control.py`）用的另一条
+    入口：站点工作台没有 `/ws/bridge` 页面也要能发命令。它与页面共用同一条上游、同一把
+    `write_lock`，只是多算一个持有者——所以"最后一个使用者走了才交还端点"这条判据不变，
+    而两路写不会把字节交错成一条撕开的命令。
     """
 
     def __init__(self, upstream_factory, observer=None) -> None:
@@ -245,6 +263,46 @@ class BridgeHub:
             self._sessions[key] = session
             return session
 
+    # --- 没有页面的持有者（控制 API）------------------------------------------
+
+    def session_for(self, gateway_id: int, ep: str):
+        """这条端点现在有没有人握着，握的是哪一条会话。
+
+        控制 API 要在**开上游之前**问这一句：接入会停 RotorHazard 的板，只有"已经有人
+        挂着"时才允许再搭一个使用者（R21）。`acquire` 自己会开上游，所以判据不能靠它。
+        """
+        return self._sessions.get((gateway_id, ep))
+
+    async def acquire(self, link: Link) -> _Session:
+        """握一条端点但不当读者。与 `serve` 共用 `_join`，所以页面随后连上来不会开第二条上游。
+
+        必须配对 `release()`：持有者计数是"这条端点还要不要握着"的另一半判据，
+        少减一次就等于把这块板永久占在一个已经没人用的命令通道上。
+        """
+        key = (link.gateway_id, link.ep)
+        session = await self._join(key, link)
+        session.holders += 1
+        return session
+
+    async def release(self, session: _Session) -> None:
+        key = (session.link.gateway_id, session.link.ep)
+        if self._sessions.get(key) is not session:
+            return  # 上游自己先没了：`_drop` 已经收过摊，这里再收一次就是关别人的连接
+        session.holders = max(0, session.holders - 1)
+        if session.readers or session.holders:
+            return
+        await self._teardown(key, session, "no more pages")
+
+    def add_tap(self, session: _Session, fn: Callable[[bytes], None]) -> int:
+        """登记一个字节旁路。`fn` 必须同步且不抛——它跑在读循环上，挡路就是让整块板停帧。"""
+        tap = session.next_tap
+        session.next_tap += 1
+        session.taps[tap] = fn
+        return tap
+
+    def remove_tap(self, session: _Session, tap: int) -> None:
+        session.taps.pop(tap, None)
+
     async def _client_loop(self, websocket: WebSocket, session: _Session, page: int) -> None:
         while True:
             try:
@@ -261,12 +319,13 @@ class BridgeHub:
                 session.writer = page
             elif session.writer != page:
                 raise Refused(BUSY)
-            try:
-                await session.upstream.send(payload)
-            except UpstreamClosed as closed:
-                raise Refused(closed.reason or "upstream_gone", closed.code or 1011) from None
-            except Exception as exc:
-                raise Refused(f"upstream_{type(exc).__name__}") from exc
+            async with session.write_lock:
+                try:
+                    await session.upstream.send(payload)
+                except UpstreamClosed as closed:
+                    raise Refused(closed.reason or "upstream_gone", closed.code or 1011) from None
+                except Exception as exc:
+                    raise Refused(f"upstream_{type(exc).__name__}") from exc
 
     # --- 上游侧 --------------------------------------------------------------
 
@@ -278,6 +337,7 @@ class BridgeHub:
                 # 先给观察者再给页面：这一句是同步入队，不改任何上游状态；顺序与桥发出的
                 # 一致，采集侧看到的字节不会比浏览器晚一帧。
                 self._observe(session.link, payload)
+                self._tap(session, payload)
                 await self._fan_out(session, payload)
         except asyncio.CancelledError:
             raise  # 是我们最后一页走时主动收的摊，不必再通知任何人
@@ -304,6 +364,14 @@ class BridgeHub:
             self.observer_failures += 1
             LOG.warning("bridge observer untap failed: %s", exc)
 
+    def _tap(self, session: _Session, payload: bytes) -> None:
+        for tap in list(session.taps.values()):
+            try:
+                tap(payload)
+            except Exception as exc:  # 旁路坏了不许带走透传，也不许带走采集
+                session.tap_failures += 1
+                LOG.warning("bridge tap failed: %s", exc)
+
     async def _fan_out(self, session: _Session, payload: bytes) -> None:
         dead = []
         for page, reader in list(session.readers.items()):
@@ -322,10 +390,15 @@ class BridgeHub:
         session.readers.pop(page, None)
         if session.writer == page:
             session.writer = None
-        if session.readers:
+        if session.readers or session.holders:
             return
-        # 最后一页走了就把端点交还给桥：桥靠这次断开释放串口并把 RotorHazard 起回来。
-        # 关不回 1000 就等于把这块板永久占在一个已经关掉的标签页上。
+        await self._teardown(key, session, "no more pages")
+
+    async def _teardown(self, key, session: _Session, reason: str) -> None:
+        """把端点交还给桥：桥靠这次断开释放串口并把 RotorHazard 起回来。
+
+        关不回 1000 就等于把这块板永久占在一个已经关掉的标签页上。
+        """
         self._sessions.pop(key, None)
         if session.pump is not None:
             session.pump.cancel()
@@ -333,8 +406,9 @@ class BridgeHub:
         # 撤观察必须排在泵收摊之后：反过来会留下"untap 之后又 tap 进来一块、这条端点
         # 再也没有 untap"的孤儿状态——采集层把它当成还在出数的板，安静判定就永远不成立。
         self._unobserve(session.link)
+        session.taps.clear()
         try:
-            await session.upstream.close(1000, "no more pages")
+            await session.upstream.close(1000, reason)
         except Exception:
             pass  # 上游已经没了就是我们想要的结果，不是新故障
 
@@ -346,9 +420,11 @@ class BridgeHub:
         # 上游自己没了同样要撤观察：这条流再也不会出字节，留着运行态就是让断流判定
         # 对着一条已经死掉的流一直"安静"。
         self._unobserve(session.link)
+        session.taps.clear()
         pages = list(session.readers.items())
         session.readers.clear()
         session.writer = None
+        session.holders = 0
         for _, reader in pages:
             await _close_quietly(reader, code or 1011, reason)
         try:
